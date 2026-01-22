@@ -11,6 +11,7 @@ import json
 
 import sys
 import time
+import datetime
 import logging
 from logging.handlers import TimedRotatingFileHandler
 import os.path
@@ -787,12 +788,34 @@ def serial_receive_state(device, packet):
                     last_topic_list[topic] = value
 
 # KTDO: 수정 완료
+def recv_safe(count=1):
+    try:
+        data = conn.recv(count)
+        if not data:
+            return None
+        return data
+    except socket.timeout:
+        return None
+    except (OSError, serial.SerialException):
+        return None
+
+
+# KTDO: 수정 완료
 def serial_get_header():
     try:
         # 0x80보다 큰 byte가 나올 때까지 대기
         # KTDO: 시작 F7 찾기
-        while 1:
-            header_0 = conn.recv(1)[0]
+        while True:
+            # header_0 = conn.recv(1)[0]
+            raw = recv_safe(1)
+            if not raw: return None, None, None, None
+            header_0 = raw[0]
+
+            # print(conn.recv(1))
+            raw_dummy = recv_safe(1)
+            if not raw_dummy: return None, None, None, None
+            print(raw_dummy)
+
             # if header_0 >= 0x80: break
             if header_0 == 0xF7:
                 break
@@ -800,14 +823,25 @@ def serial_get_header():
         # 중간에 corrupt되는 data가 있으므로 연속으로 0x80보다 큰 byte가 나오면 먼젓번은 무시한다
         # KTDO: 연속 0xF7 무시
         while 1:
-            header_1 = conn.recv(1)[0]
+            # header_1 = conn.recv(1)[0]
+            raw = recv_safe(1)
+            if not raw: return None, None, None, None
+            header_1 = raw[0]
+
             # if header_1 < 0x80: break
             if header_1 != 0xF7:
                 break
             header_0 = header_1
 
-        header_2 = conn.recv(1)[0]
-        header_3 = conn.recv(1)[0]
+        # header_2 = conn.recv(1)[0]
+        raw = recv_safe(1)
+        if not raw: return None, None, None, None
+        header_2 = raw[0]
+
+        # header_3 = conn.recv(1)[0]
+        raw = recv_safe(1)
+        if not raw: return None, None, None, None
+        header_3 = raw[0]
 
     except (OSError, serial.SerialException):
         logger.error("ignore exception!")
@@ -871,13 +905,41 @@ def serial_loop():
     scan_count = 0
     send_aggressive = False
 
+    # Set timeout for periodic checks
+    conn.set_timeout(1.0)
+    last_packet_time = time.time()
+    last_restart_check = 0
+
     start_time = time.time()
     while True:
         # 로그 출력
         sys.stdout.flush()
 
+        # Auto Restart Check
+        if time.time() - last_restart_check > 10:
+            last_restart_check = time.time()
+
+            # Scheduled Restart
+            restart_time = Options.get("restart", {}).get("time", "04:00")
+            if restart_time and datetime.datetime.now().strftime("%H:%M") == restart_time:
+                logger.info(f"Scheduled restart at {restart_time}")
+                sys.exit(0)
+
+            # Inactivity Restart
+            inactivity_limit = Options.get("restart", {}).get("inactivity", 0)
+            if inactivity_limit > 0:
+                if time.time() - last_packet_time > inactivity_limit * 60:
+                    logger.warning(f"No packets for {inactivity_limit} minutes. Restarting...")
+                    sys.exit(0)
+
         # 첫 Byte만 0x80보다 큰 두 Byte를 찾음
         header_0, header_1, header_2, header_3 = serial_get_header()
+
+        if header_0 is None:
+            continue
+        
+        last_packet_time = time.time()
+
         # KTDO: 패킷단위로 분석할 것이라 합치지 않음.
         # header = (header_0 << 8) | header_1
         # device로부터의 state 응답이면 확인해서 필요시 HA로 전송해야 함

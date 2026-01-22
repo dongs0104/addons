@@ -42,6 +42,10 @@
 			"dump_time": 0,
             "intercom_header": "A45A"
 		},
+		"restart": {
+			"time": "04:00",
+			"inactivity": 0
+		},
 		"log": {
 			"to_file": true,
 			"filename": "/share/ezville_wallpad.log"
@@ -77,6 +81,10 @@
 			"early_response": "int(0,2)",
 			"dump_time": "int",
             "intercom_header": "str?"
+		},
+		"restart": {
+			"time": "str?",
+			"inactivity": "int(0,1440)"
 		},
 		"log": {
 			"to_file": "bool",
