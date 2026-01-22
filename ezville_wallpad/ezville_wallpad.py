@@ -2,7 +2,7 @@
 # Second Modify by KT("ktdo79") <ktdo79@gmail.com> since 2022-06-25
 
 # This is a part of EzVille Wallpad Addon for Home Assistant
-# Author: Dong SHIN <d0104.shin@gmail.com> 2024-02-15
+# Author: Dong SHIN <d0104.shin@gmail.com> 2026-01-22
 
 import socket
 import serial
