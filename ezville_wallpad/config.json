@@ -1,5 +1,5 @@
 {
-	"version": "0.0.1.bf29fec",
+	"version": "0.0.1.b6d8f6a",
 	"slug": "ezville_wallpad",
 	"name": "EzVille RS485 Addon (MQTT)",
 	"description": "이지빌용 월패드 애드온 (MQTT 전용 모드)",
