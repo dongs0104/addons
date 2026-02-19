@@ -808,28 +808,56 @@ def start_mqtt_loop():
 
 
 def watchdog_loop():
-    """Watchdog 루프 - 패킷 수신 모니터링"""
+    """Watchdog 루프 - 패킷 수신 모니터링 및 자동 재시작"""
     global last_packet_time
 
     timeout = Options.get("watchdog", {}).get("timeout", 60)
-    if timeout <= 0:
-        logger.info("Watchdog disabled")
+    restart_time = Options.get("restart", {}).get("time", "")
+    inactivity_min = Options.get("restart", {}).get("inactivity", 0)
+
+    if timeout <= 0 and not restart_time and inactivity_min <= 0:
+        logger.info("Watchdog and restart disabled")
         return
 
-    logger.info("Watchdog started (timeout: %d seconds)", timeout)
+    logger.info(
+        "Watchdog started (timeout: %ds, restart_time: %s, inactivity: %d min)",
+        timeout,
+        restart_time or "disabled",
+        inactivity_min,
+    )
 
     while True:
         time.sleep(10)
 
-        elapsed = time.time() - last_packet_time
-        if elapsed > timeout:
-            logger.warning(
-                "No packet received for %.1f seconds (timeout: %d)",
-                elapsed,
-                timeout,
-            )
-            # 버퍼 초기화
-            packet_buffer.clear()
+        # 스케줄 재시작: 매일 지정 시각에 프로세스 재시작
+        if restart_time:
+            now_hm = datetime.datetime.now().strftime("%H:%M")
+            if now_hm == restart_time:
+                logger.info("Scheduled restart at %s", restart_time)
+                sys.exit(0)
+
+        # 비활성 재시작: N분간 패킷 수신 없으면 프로세스 재시작
+        if inactivity_min > 0:
+            inactivity_sec = inactivity_min * 60
+            elapsed = time.time() - last_packet_time
+            if elapsed > inactivity_sec:
+                logger.warning(
+                    "No packets for %.0f seconds (limit: %d min). Restarting...",
+                    elapsed,
+                    inactivity_min,
+                )
+                sys.exit(0)
+
+        # Watchdog 경고: timeout 초과 시 경고 로그 및 버퍼 초기화
+        if timeout > 0:
+            elapsed = time.time() - last_packet_time
+            if elapsed > timeout:
+                logger.warning(
+                    "No packet received for %.1f seconds (timeout: %d)",
+                    elapsed,
+                    timeout,
+                )
+                packet_buffer.clear()
 
         # 오래된 명령 정리
         current_time = time.time()

@@ -1,8 +1,8 @@
 import paho.mqtt.client as mqtt
 import json
+import sys
 import time
 import asyncio
-import telnetlib
 import socket
 import random
 
@@ -251,8 +251,6 @@ def ezville_loop(config):
     EW11_TIMEOUT = config["ew11_timeout"]
     last_received_time = time.time()
 
-    # EW11 재시작 확인용 Flag
-    restart_flag = False
 
     # MQTT Integration 활성화 확인 Flag - 단, 사용을 위해서는 MQTT Integration에서 Birth/Last Will Testament 설정 및 Retain 설정 필요
     MQTT_ONLINE = False
@@ -328,8 +326,8 @@ def ezville_loop(config):
             MSG_QUEUE.put(msg)
 
     # MQTT 통신 연결 해제 Callback
-    def on_disconnect(client, userdata, rc):
-        log("INFO: MQTT 연결 해제")
+    def on_disconnect(client, userdata, flags, rc, properties):
+        log("[INFO] MQTT 연결 해제")
         pass
 
     # MQTT message를 분류하여 처리
@@ -1045,48 +1043,22 @@ def ezville_loop(config):
             )
             return
 
-    # EW11 동작 상태를 체크해서 필요시 리셋 실시
+    # EW11 동작 상태를 체크해서 필요시 앱 재시작
     async def ew11_health_loop():
         while True:
-            timestamp = time.time()
+            elapsed = time.time() - last_received_time
 
-            # TIMEOUT 시간 동안 새로 받은 EW11 패킷이 없으면 재시작
-            if timestamp - last_received_time > EW11_TIMEOUT:
+            # TIMEOUT 시간 동안 새로 받은 EW11 패킷이 없으면 앱 재시작
+            if elapsed > EW11_TIMEOUT:
                 log(
-                    "[WARNING] {} {} {}초간 신호를 받지 못했습니다. ew11 기기를 재시작합니다.".format(
-                        timestamp, last_received_time, EW11_TIMEOUT
+                    "[WARNING] {:.0f}초간 신호를 받지 못했습니다 (timeout: {:.0f}초). 앱을 재시작합니다.".format(
+                        elapsed, EW11_TIMEOUT
                     )
                 )
-                try:
-                    await reset_EW11()
-
-                    restart_flag = True
-
-                except:
-                    log("[ERROR] 기기 재시작 오류! 기기 상태를 확인하세요.")
+                sys.exit(0)
             else:
                 log("[INFO] EW11 연결 상태 문제 없음")
             await asyncio.sleep(EW11_TIMEOUT)
-
-    # Telnet 접속하여 EW11 리셋
-    async def reset_EW11():
-        ew11_id = config["ew11_id"]
-        ew11_password = config["ew11_password"]
-        ew11_server = config["ew11_server"]
-
-        ew11 = telnetlib.Telnet(ew11_server)
-
-        ew11.read_until(b"login:")
-        ew11.write(ew11_id.encode("utf-8") + b"\n")
-        ew11.read_until(b"password:")
-        ew11.write(ew11_password.encode("utf-8") + b"\n")
-        ew11.write("Restart".encode("utf-8") + b"\n")
-        ew11.read_until(b"Restart..")
-
-        log("[INFO] EW11 리셋 완료")
-
-        # 리셋 후 60초간 Delay
-        await asyncio.sleep(60)
 
     def initiate_socket():
         # SOCKET 통신 시작
@@ -1171,31 +1143,25 @@ def ezville_loop(config):
             # COMMAND_LOOP_DELAY 초 대기 후 루프 진행
             await asyncio.sleep(COMMAND_LOOP_DELAY)
 
-    # EW11 재실행 시 리스타트 실시
+    # MQTT Offline 감지 시 리스타트 실시
     async def restart_control():
         nonlocal mqtt_client
-        nonlocal restart_flag
         nonlocal MQTT_ONLINE
 
         while True:
-            if restart_flag or (not MQTT_ONLINE and ADDON_STARTED and REBOOT_CONTROL):
-                if restart_flag:
-                    log("[WARNING] EW11 재시작 확인")
-                elif not MQTT_ONLINE and ADDON_STARTED and REBOOT_CONTROL:
-                    log("[WARNING] 동작 중 MQTT Integration Offline 변경")
+            if not MQTT_ONLINE and ADDON_STARTED and REBOOT_CONTROL:
+                log("[WARNING] 동작 중 MQTT Integration Offline 변경")
 
                 # Asyncio Loop 획득
                 loop = asyncio.get_event_loop()
 
-                # MTTQ 및 socket 연결 종료
+                # MQTT 및 socket 연결 종료
                 log("[WARNING] 모든 통신 종료")
                 mqtt_client.loop_stop()
                 if comm_mode == "mixed" or comm_mode == "socket":
                     nonlocal soc
                     soc.close()
 
-                # flag 원복
-                restart_flag = False
                 MQTT_ONLINE = False
 
                 # asyncio loop 종료
