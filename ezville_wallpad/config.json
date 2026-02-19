@@ -1,31 +1,20 @@
 {
 	"version": "0.0.1.bf29fec",
 	"slug": "ezville_wallpad",
-	"name": "EzVille RS485 Addon",
-	"description": "이지빌용 수정된 애드온입니다.",
+	"name": "EzVille RS485 Addon (MQTT)",
+	"description": "이지빌용 월패드 애드온 (MQTT 전용 모드)",
 	"url": "https://github.com/dongs0104/addons",
 	"startup": "application",
 	"boot": "auto",
 	"arch": [ "armhf", "armv7", "aarch64", "amd64", "i386" ],
 
-	"auto_uart": true,
 	"map": [ "share:rw" ],
 
 	"options": {
-		"serial_mode": "socket",
-		"entrance_mode": "off",
 		"wallpad_mode": "on",
-		"intercom_mode": "off",
-		"serial": {
-			"port":  "/dev/ttyUSB0",
-			"baudrate": 9600,
-			"bytesize": 8,
-			"parity": "E",
-			"stopbits": 1
-		},
-		"socket": {
-			"address": "192.168.1.1",
-			"port": 8899
+		"rs485_mqtt": {
+			"recv_topic": "ew11/recv",
+			"send_topic": "ew11/send"
 		},
 		"mqtt": {
 			"server": "127.0.0.1",
@@ -37,10 +26,10 @@
 			"prefix": "ezville"
 		},
 		"rs485": {
-			"max_retry": 20,
-			"early_response": 2,
-			"dump_time": 0,
-            "intercom_header": "A45A"
+			"max_retry": 20
+		},
+		"watchdog": {
+			"timeout": 60
 		},
 		"restart": {
 			"time": "04:00",
@@ -52,20 +41,10 @@
 		}
 	},
 	"schema": {
-		"serial_mode": "list(serial|socket)",
-		"entrance_mode": "list(full|new|minimal|off)",
 		"wallpad_mode": "list(on|off)",
-		"intercom_mode": "list(on|off)",
-		"serial": {
-			"port":  "str",
-			"baudrate": "int",
-			"bytesize": "int(5,8)",
-			"parity": "list(E|O|N|M|S)",
-			"stopbits": "int(0,3)"
-		},
-		"socket": {
-			"address": "str?",
-			"port": "int?"
+		"rs485_mqtt": {
+			"recv_topic": "str",
+			"send_topic": "str"
 		},
 		"mqtt": {
 			"server": "str",
@@ -77,10 +56,10 @@
 			"prefix": "str"
 		},
 		"rs485": {
-			"max_retry": "int(0,100)",
-			"early_response": "int(0,2)",
-			"dump_time": "int",
-            "intercom_header": "str?"
+			"max_retry": "int(0,100)"
+		},
+		"watchdog": {
+			"timeout": "int(0,3600)"
 		},
 		"restart": {
 			"time": "str?",

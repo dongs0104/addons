@@ -3,12 +3,10 @@
 
 # This is a part of EzVille Wallpad Addon for Home Assistant
 # Author: Dong SHIN <d0104.shin@gmail.com> 2026-01-22
+# Refactored to MQTT-only structure: 2025-01-25
 
-import socket
-import serial
 import paho.mqtt.client as paho_mqtt
 import json
-
 import sys
 import time
 import datetime
@@ -16,6 +14,7 @@ import logging
 from logging.handlers import TimedRotatingFileHandler
 import os.path
 import re
+import threading
 
 RS485_DEVICE = {
     "light": {
@@ -34,7 +33,7 @@ RS485_DEVICE = {
             "ack": 0xC1,
         },
     },
-    "thermostat": {  # 안 보임
+    "thermostat": {
         "query": {
             "id": 0x36,
             "cmd": 0x01,
@@ -55,15 +54,15 @@ RS485_DEVICE = {
             "ack": 0xC4,
         },
     },
-    "gasvalve": {  # TODO: FIX
+    "gasvalve": {
         "state": {"id": 0x12, "cmd": 0x81},
-        "power": {"id": 0x12, "cmd": 0x41, "ack": 0xC1},  # 잠그기만 가능
+        "power": {"id": 0x12, "cmd": 0x41, "ack": 0xC1},
     },
-    "batch": {  # 안보임
+    "batch": {
         "state": {"id": 0x33, "cmd": 0x81},
         "press": {"id": 0x33, "cmd": 0x41, "ack": 0xC1},
     },
-    "plug": {  # 안보임
+    "plug": {
         "state": {"id": 0x50, "cmd": 0x81},
         "power": {"id": 0x50, "cmd": 0x43, "ack": 0xC3},
     },
@@ -90,22 +89,6 @@ DISCOVERY_PAYLOAD = {
             "cmd_t": "~/power/command",
         }
     ],
-    #   "fan": [ {
-    #       "_intg": "fan",
-    #       "~": "{prefix}/fan/{idn}",
-    #       "name": "{prefix}_fan_{idn}",
-    #       "opt": True,
-    #       "stat_t": "~/power/state",
-    #       "cmd_t": "~/power/command",
-    #       "spd_stat_t": "~/speed/state",
-    #       "spd_cmd_t": "~/speed/command",
-    #       "pl_on": 5,
-    #       "pl_off": 6,
-    #       "pl_lo_spd": 3,
-    #       "pl_med_spd": 2,
-    #       "pl_hi_spd": 1,
-    #       "spds": ["low", "medium", "high"],
-    #   } ],
     "thermostat": [
         {
             "_intg": "climate",
@@ -188,7 +171,6 @@ QUERY_HEADER = {
     for device, prop in RS485_DEVICE.items()
     if "query" in prop
 }
-# 제어 명령의 ACK header만 모음
 ACK_HEADER = {
     prop[cmd]["id"]: (device, prop[cmd]["ack"])
     for device, prop in RS485_DEVICE.items()
@@ -196,33 +178,17 @@ ACK_HEADER = {
     if "ack" in code
 }
 
-# KTDO: 제어 명령과 ACK의 Pair 저장
 ACK_MAP = {}
 for device, prop in RS485_DEVICE.items():
     for cmd, code in prop.items():
         if "ack" in code:
-            ACK_MAP[code["id"]] = {}
-            ACK_MAP[code["id"]][code["cmd"]] = {}
+            if code["id"] not in ACK_MAP:
+                ACK_MAP[code["id"]] = {}
             ACK_MAP[code["id"]][code["cmd"]] = code["ack"]
 
-# KTDO: 아래 미사용으로 코멘트 처리
-# HEADER_0_STATE = 0xB0
-# KTDO: Ezville에서는 가스밸브 STATE Query 코드로 처리
-HEADER_0_FIRST = [[0x12, 0x01], [0x12, 0x0F]]
-# KTDO: Virtual은 Skip
-# header_0_virtual = {}
-# KTDO: 아래 미사용으로 코멘트 처리
-# HEADER_1_SCAN = 0x5A
-header_0_first_candidate = [[[0x33, 0x01], [0x33, 0x0F]], [[0x36, 0x01], [0x36, 0x0F]]]
-
-# human error를 로그로 찍기 위해서 그냥 전부 구독하자
-# SUB_LIST = { "{}/{}/+/+/command".format(Options["mqtt"]["prefix"], device) for device in RS485_DEVICE } |\
-#           { "{}/virtual/{}/+/command".format(Options["mqtt"]["prefix"], device) for device in VIRTUAL_DEVICE }
-
+# 전역 변수
 serial_queue = {}
 serial_ack = {}
-
-last_query = int(0).to_bytes(2, "big")
 last_topic_list = {}
 
 mqtt = paho_mqtt.Client(paho_mqtt.CallbackAPIVersion.VERSION2)
@@ -230,109 +196,67 @@ mqtt_connected = False
 
 logger = logging.getLogger(__name__)
 
+# Watchdog 관련 전역 변수
+last_packet_time = time.time()
 
-# KTDO: 수정 완료
-class EzVilleSerial:
+# 패킷 버퍼 (MQTT에서 받은 RS485 데이터 처리용)
+packet_buffer = bytearray()
+packet_buffer_lock = threading.Lock()
+
+# 명령 전송 관련
+command_send_lock = threading.Lock()
+last_command_time = 0
+
+
+class PacketBuffer:
+    """RS485 패킷 버퍼 관리 클래스"""
+
     def __init__(self):
-        self._ser = serial.Serial()
-        self._ser.port = Options["serial"]["port"]
-        self._ser.baudrate = Options["serial"]["baudrate"]
-        self._ser.bytesize = Options["serial"]["bytesize"]
-        self._ser.parity = Options["serial"]["parity"]
-        self._ser.stopbits = Options["serial"]["stopbits"]
+        self._buffer = bytearray()
+        self._lock = threading.Lock()
 
-        self._ser.close()
-        self._ser.open()
+    def add_data(self, data: bytes):
+        """버퍼에 데이터 추가"""
+        with self._lock:
+            self._buffer.extend(data)
 
-        self._pending_recv = 0
+    def get_packet(self):
+        """
+        버퍼에서 완전한 패킷 하나를 추출
+        패킷 구조: [0xF7][device_id][room_id][cmd][length][data...][XOR][ADD]
+        """
+        with self._lock:
+            # 0xF7 시작점 찾기
+            while len(self._buffer) > 0 and self._buffer[0] != 0xF7:
+                del self._buffer[0]
 
-        # 시리얼에 뭐가 떠다니는지 확인
-        self.set_timeout(5.0)
-        data = self._recv_raw(1)
-        self.set_timeout(None)
-        if not data:
-            logger.critical("no active packet at this serial port!")
+            # 최소 패킷 길이 확인 (헤더 5바이트 + 체크섬 2바이트)
+            if len(self._buffer) < 7:
+                return None
 
-    def _recv_raw(self, count=1):
-        return self._ser.read(count)
+            # 패킷 길이 확인 (4번째 바이트가 데이터 길이)
+            data_length = self._buffer[4]
+            packet_length = 5 + data_length + 2  # 헤더(5) + 데이터 + 체크섬(2)
 
-    def recv(self, count=1):
-        # serial은 pending count만 업데이트
-        self._pending_recv = max(self._pending_recv - count, 0)
-        return self._recv_raw(count)
+            if len(self._buffer) < packet_length:
+                return None
 
-    def send(self, a):
-        self._ser.write(a)
+            # 패킷 추출
+            packet = bytes(self._buffer[:packet_length])
+            del self._buffer[:packet_length]
 
-    def set_pending_recv(self):
-        self._pending_recv = self._ser.in_waiting
+            return packet
 
-    def check_pending_recv(self):
-        return self._pending_recv
-
-    def check_in_waiting(self):
-        return self._ser.in_waiting
-
-    def set_timeout(self, a):
-        self._ser.timeout = a
+    def clear(self):
+        """버퍼 초기화"""
+        with self._lock:
+            self._buffer.clear()
 
 
-# KTDO: 수정 완료
-class EzVilleSocket:
-    def __init__(self):
-        addr = Options["socket"]["address"]
-        port = Options["socket"]["port"]
-
-        self._soc = socket.socket()
-        self._soc.connect((addr, port))
-
-        self._recv_buf = bytearray()
-        self._pending_recv = 0
-
-        # 소켓에 뭐가 떠다니는지 확인
-        self.set_timeout(5.0)
-        data = self._recv_raw(1)
-        self.set_timeout(None)
-        if not data:
-            logger.critical("no active packet at this socket!")
-
-    def _recv_raw(self, count=1):
-        return self._soc.recv(count)
-
-    def recv(self, count=1):
-        # socket은 버퍼와 in_waiting 직접 관리
-        if len(self._recv_buf) < count:
-            new_data = self._recv_raw(128)
-            self._recv_buf.extend(new_data)
-        if len(self._recv_buf) < count:
-            return None
-
-        self._pending_recv = max(self._pending_recv - count, 0)
-
-        res = self._recv_buf[0:count]
-        del self._recv_buf[0:count]
-        return res
-
-    def send(self, a):
-        self._soc.sendall(a)
-
-    def set_pending_recv(self):
-        self._pending_recv = len(self._recv_buf)
-
-    def check_pending_recv(self):
-        return self._pending_recv
-
-    def check_in_waiting(self):
-        if len(self._recv_buf) == 0:
-            new_data = self._recv_raw(128)
-            self._recv_buf.extend(new_data)
-        return len(self._recv_buf)
-
-    def set_timeout(self, a):
-        self._soc.settimeout(a)
+# 패킷 버퍼 인스턴스
+packet_buffer = PacketBuffer()
 
 
-# KTDO: 수정 완료
 def init_logger():
     logger.setLevel(logging.INFO)
 
@@ -344,7 +268,6 @@ def init_logger():
     logger.addHandler(handler)
 
 
-# KTDO: 수정 완료
 def init_logger_file():
     if Options["log"]["to_file"]:
         filename = Options["log"]["filename"]
@@ -361,19 +284,14 @@ def init_logger_file():
         logger.addHandler(handler)
 
 
-# KTDO: 수정 완료
 def init_option(argv):
-    # option 파일 선택
     if len(argv) == 1:
         option_file = "./options_standalone.json"
     else:
         option_file = argv[1]
 
-    # configuration이 예전 버전이어도 최대한 동작 가능하도록,
-    # 기본값에 해당하는 파일을 먼저 읽고나서 설정 파일로 업데이트 한다.
     global Options
 
-    # 기본값 파일은 .py 와 같은 경로에 있음
     default_file = os.path.join(
         os.path.dirname(os.path.abspath(argv[0])), "config.json"
     )
@@ -385,7 +303,6 @@ def init_option(argv):
     with open(option_file, encoding="utf-8") as f:
         Options2 = json.load(f)
 
-    # 업데이트
     for k, v in Options.items():
         if isinstance(v, dict) and k in Options2:
             Options[k].update(Options2[k])
@@ -407,46 +324,90 @@ def init_option(argv):
             else:
                 Options[k] = Options2[k]
 
-    # 관용성 확보
     Options["mqtt"]["server"] = re.sub("[a-z]*://", "", Options["mqtt"]["server"])
     if Options["mqtt"]["server"] == "127.0.0.1":
         logger.warning("MQTT server address should be changed!")
 
-    # internal options
     Options["mqtt"]["_discovery"] = Options["mqtt"]["discovery"]
 
 
-# KTDO: 수정 완료
+def serial_verify_checksum(packet):
+    """패킷 체크섬 검증"""
+    if len(packet) < 7:
+        return False
+
+    # XOR 체크섬 (마지막 ADD 바이트 제외)
+    checksum = 0
+    for b in packet[:-1]:
+        checksum ^= b
+
+    # ADD 계산
+    add = sum(packet[:-1]) & 0xFF
+
+    if checksum != 0 or add != packet[-1]:
+        logger.warning(
+            "checksum fail! {}, xor:{:02x}, add:{:02x}".format(
+                packet.hex(), checksum, add
+            )
+        )
+        return False
+
+    return True
+
+
+def serial_generate_checksum(packet):
+    """패킷 체크섬 생성"""
+    checksum = 0
+    for b in packet[:-1]:
+        checksum ^= b
+
+    add = (sum(packet) + checksum) & 0xFF
+
+    return checksum, add
+
+
+def rs485_send(packet: bytes):
+    """RS485로 패킷 전송 (MQTT를 통해)"""
+    global last_command_time
+
+    if not mqtt_connected:
+        logger.warning("MQTT not connected, cannot send RS485 packet")
+        return False
+
+    send_topic = Options["rs485_mqtt"]["send_topic"]
+
+    with command_send_lock:
+        # 명령 간 최소 간격 유지 (100ms)
+        elapsed = time.time() - last_command_time
+        if elapsed < 0.1:
+            time.sleep(0.1 - elapsed)
+
+        mqtt.publish(send_topic, packet)
+        last_command_time = time.time()
+        logger.info("send to RS485:   {}".format(packet.hex()))
+
+    return True
+
+
 def mqtt_discovery(payload):
-    """
-    Publishes MQTT discovery message for a new device.
-
-    Args:
-        payload (dict): The payload containing device information.
-
-    Returns:
-        None
-    """
+    """MQTT Discovery 메시지 발행"""
     intg = payload.pop("_intg")
 
-    # MQTT 통합구성요소에 등록되기 위한 추가 내용
     payload["device"] = DISCOVERY_DEVICE
     payload["uniq_id"] = payload["name"]
 
-    # discovery에 등록
     topic = f"homeassistant/{intg}/ezville_wallpad/{payload['name']}/config"
     logger.info("Add new device: %s", topic)
     mqtt.publish(topic, json.dumps(payload))
 
 
-# KTDO: 수정 완료
 def mqtt_debug(topics, payload):
+    """디버그 명령 처리"""
     device = topics[2]
     command = topics[3]
 
     if device == "packet":
         if command == "send":
-            # parity는 여기서 재생성
             packet = bytearray.fromhex(payload)
             packet[-2], packet[-1] = serial_generate_checksum(packet)
             packet = bytes(packet)
@@ -455,13 +416,12 @@ def mqtt_debug(topics, payload):
             serial_queue[packet] = time.time()
 
 
-# KTDO: 수정 완료
 def mqtt_device(topics, payload):
+    """HA에서 받은 장치 제어 명령 처리"""
     device = topics[1]
     idn = topics[2]
     cmd = topics[3]
 
-    # HA에서 잘못 보내는 경우 체크
     if device not in RS485_DEVICE:
         logger.error("    unknown device!")
         return
@@ -472,14 +432,12 @@ def mqtt_device(topics, payload):
         logger.error("    no payload!")
         return
 
-    # ON, OFF인 경우만 1, 0으로 변환, 복잡한 경우 (fan 등) 는 값으로 받자
-
-    # 오류 체크 끝났으면 serial 메시지 생성
     cmd = RS485_DEVICE[device][cmd]
     packet = None
+
     if device == "light":
         if payload == "ON":
-            payload = 0xF1 if idn.startswith("1_1") else 0x01  # 거실등만 0xF1
+            payload = 0xF1 if idn.startswith("1_1") else 0x01
         elif payload == "OFF":
             payload = 0x00
         length = 10
@@ -493,6 +451,7 @@ def mqtt_device(topics, payload):
         packet[6] = payload
         packet[7] = 0x00
         packet[8], packet[9] = serial_generate_checksum(packet)
+
     elif device == "thermostat":
         if payload == "heat":
             payload = 0x01
@@ -507,7 +466,7 @@ def mqtt_device(topics, payload):
         packet[4] = 0x01
         packet[5] = int(float(payload))
         packet[6], packet[7] = serial_generate_checksum(packet)
-    # TODO : gasvalve, batch, plug
+
     elif device == "gasvalve":
         if payload == "off":
             payload = 0x00
@@ -515,22 +474,20 @@ def mqtt_device(topics, payload):
             packet = bytearray(length)
             packet[0] = 0xF7
             packet[1] = cmd["id"]
-            packet[2] = idn
+            packet[2] = int(idn) if idn.isdigit() else 0x01
             packet[3] = cmd["cmd"]
             packet[4] = 0x01
             packet[5] = int(float(payload))
             packet[6], packet[7] = serial_generate_checksum(packet)
+
     if packet:
         packet = bytes(packet)
         serial_queue[packet] = time.time()
 
 
-# KTDO: 수정 완료
 def mqtt_init_discovery():
-    # HA가 재시작됐을 때 모든 discovery를 다시 수행한다
+    """Discovery 초기화"""
     Options["mqtt"]["_discovery"] = Options["mqtt"]["discovery"]
-    # KTDO: Virtual Device는 Skip
-    #    mqtt_add_virtual()
     for device in RS485_DEVICE:
         RS485_DEVICE[device]["last"] = {}
 
@@ -538,159 +495,37 @@ def mqtt_init_discovery():
     last_topic_list = {}
 
 
-# KTDO: 수정 완료
-def mqtt_on_message(mqtt, userdata, msg):
-    topics = msg.topic.split("/")
-    payload = msg.payload.decode()
-
-    logger.info("recv. from HA:   %s = %s", msg.topic, payload)
-
-    device = topics[1]
-    if device == "status":
-        if payload == "online":
-            mqtt_init_discovery()
-    elif device == "debug":
-        mqtt_debug(topics, payload)
-    else:
-        mqtt_device(topics, payload)
-
-
-# KTDO: 수정 완료
-def mqtt_on_connect(mqtt, userdata, flags, rc, properties):
-    if rc == 0:
-        logger.info("MQTT connect successful!")
-        global mqtt_connected
-        mqtt_connected = True
-    else:
-        logger.error(
-            "MQTT connection return with:  %s", paho_mqtt.connack_string(rc)
-        )
-
-    mqtt_init_discovery()
-
-    topic = "homeassistant/status"
-    logger.info("subscribe %s", topic)
-    mqtt.subscribe(topic, 0)
-
-    prefix = Options["mqtt"]["prefix"]
-    if Options["wallpad_mode"] != "off":
-        topic = f"{prefix}/+/+/+/command"
-        logger.info("subscribe %s", topic)
-        mqtt.subscribe(topic, 0)
-
-
-# KTDO: 수정 완료
-def mqtt_on_disconnect(mqtt, userdata, rc):
-    logger.warning("MQTT disconnected! (%s)", rc)
-    global mqtt_connected
-    mqtt_connected = False
-
-# KTDO: 수정 완료
-def start_mqtt_loop():
-    logger.info("initialize mqtt...")
-
-    mqtt.on_message = mqtt_on_message
-    mqtt.on_connect = mqtt_on_connect
-    mqtt.on_disconnect = mqtt_on_disconnect
-
-    if Options["mqtt"]["need_login"]:
-        mqtt.username_pw_set(Options["mqtt"]["user"], Options["mqtt"]["passwd"])
-
-    try:
-        mqtt.connect(Options["mqtt"]["server"], Options["mqtt"]["port"])
-    except Exception as e:
-        logger.error("MQTT server address/port may be incorrect! (%s)" , e)
-        sys.exit(1)
-
-    mqtt.loop_start()
-
-    delay = 1
-    while not mqtt_connected:
-        logger.info("waiting MQTT connected ...")
-        time.sleep(delay)
-        delay = min(delay * 2, 10)
-
-# KTDO: 수정 완료
-def serial_verify_checksum(packet):
-    # 모든 byte를 XOR
-    # KTDO: 마지막 ADD 빼고 XOR
-    checksum = 0
-    for b in packet[:-1]:
-        checksum ^= b
-
-    # KTDO: ADD 계산
-    add = sum(packet[:-1]) & 0xFF
-
-    # parity의 최상위 bit는 항상 0
-    # KTDO: EzVille은 아님
-    # if checksum >= 0x80: checksum -= 0x80
-
-    # checksum이 안맞으면 로그만 찍고 무시
-    # KTDO: ADD 까지 맞아야함.
-    if checksum or add != packet[-1]:
-        logger.warning(
-            "checksum fail! {}, {:02x}, {:02x}".format(packet.hex(), checksum, add)
-        )
-        return False
-
-    # 정상
-    return True
-
-
-# KTDO: 수정 완료
-def serial_generate_checksum(packet):
-    # 마지막 제외하고 모든 byte를 XOR
-    checksum = 0
-    for b in packet[:-1]:
-        checksum ^= b
-
-    # KTDO: add 추가 생성
-    add = (sum(packet) + checksum) & 0xFF
-
-    # KTDO: EzVille은 그냥 XOR
-    #    # parity의 최상위 bit는 항상 0
-    #    if checksum >= 0x80: checksum -= 0x80
-    #    checksumadd = (checksum << 8) | add
-
-    #    return checksumadd
-    return checksum, add
-
-# KTDO: 수정 완료
 def serial_new_device(device, packet, idn=None):
+    """새 장치 Discovery 등록"""
     prefix = Options["mqtt"]["prefix"]
-    # 조명은 두 id를 조합해서 개수와 번호를 정해야 함
+
     if device == "light":
-        # KTDO: EzVille에 맞게 수정
         grp_id = int(packet[2] >> 4)
         rm_id = int(packet[2] & 0x0F)
         light_count = int(packet[4]) - 1
 
-        # id2 = last_query[3]
-        # num = idn >> 4
-        # idn = int("{:x}".format(idn))
-
-        for id in range(1, light_count + 1):
+        for light_id in range(1, light_count + 1):
             payload = DISCOVERY_PAYLOAD[device][0].copy()
             payload["~"] = payload["~"].format(
-                prefix=prefix, grp=grp_id, rm=rm_id, id=id
+                prefix=prefix, grp=grp_id, rm=rm_id, id=light_id
             )
             payload["name"] = payload["name"].format(
-                prefix=prefix, grp=grp_id, rm=rm_id, id=id
+                prefix=prefix, grp=grp_id, rm=rm_id, id=light_id
             )
-
             mqtt_discovery(payload)
 
     elif device == "thermostat":
-        # KTDO: EzVille에 맞게 수정
         grp_id = int(packet[2] >> 4)
         room_count = int((int(packet[4]) - 5) / 2)
 
-        for id in range(1, room_count + 1):
+        for room_id in range(1, room_count + 1):
             payload = DISCOVERY_PAYLOAD[device][0].copy()
-            payload["~"] = payload["~"].format(prefix=prefix, grp=grp_id, id=id)
-            payload["name"] = payload["name"].format(prefix=prefix, grp=grp_id, id=id)
-
+            payload["~"] = payload["~"].format(prefix=prefix, grp=grp_id, id=room_id)
+            payload["name"] = payload["name"].format(
+                prefix=prefix, grp=grp_id, id=room_id
+            )
             mqtt_discovery(payload)
+
     elif device in DISCOVERY_PAYLOAD:
         for payloads in DISCOVERY_PAYLOAD[device]:
             payload = payloads.copy()
@@ -698,8 +533,6 @@ def serial_new_device(device, packet, idn=None):
             payload["~"] = payload["~"].format(prefix=prefix, idn=idn)
             payload["name"] = payload["name"].format(prefix=prefix, idn=idn)
 
-            # 실시간 에너지 사용량에는 적절한 이름과 단위를 붙여준다 (단위가 없으면 그래프로 출력이 안됨)
-            # KTDO: Ezville에 에너지 확인 쿼리 없음
             if device == "energy":
                 payload["name"] = "{}_{}_consumption".format(
                     prefix, ("power", "gas", "water")[idn]
@@ -714,33 +547,21 @@ def serial_new_device(device, packet, idn=None):
             mqtt_discovery(payload)
 
 
-# KTDO: 수정 완료
 def serial_receive_state(device, packet):
-    form = RS485_DEVICE[device]["state"]
+    """장치 상태 수신 및 HA로 발행"""
     last = RS485_DEVICE[device]["last"]
-
-    # if form.get("id") != None:
-    #    idn = packet[form["id"]]
-    # else:
-    #    idn = 1
     idn = (packet[1] << 8) | packet[2]
 
-    # 해당 ID의 이전 상태와 같은 경우 바로 무시
     if last.get(idn) == packet:
         return
 
-    # 처음 받은 상태인 경우, discovery 용도로 등록한다.
     if Options["mqtt"]["_discovery"] and not last.get(idn):
         serial_new_device(device, packet, idn)
         last[idn] = True
-
-        # 장치 등록 먼저 하고, 상태 등록은 그 다음 턴에 한다. (난방 상태 등록 무시되는 현상 방지)
         return
-
     else:
         last[idn] = packet
 
-    # KTDO: 아래 코드로 값을 바로 판별
     prefix = Options["mqtt"]["prefix"]
 
     if device == "light":
@@ -750,10 +571,7 @@ def serial_receive_state(device, packet):
 
         for light_id in range(1, light_count + 1):
             topic = f"{prefix}/{device}/{grp_id}_{rm_id}_{light_id}/power/state"
-            if packet[5 + light_id] & 1:
-                value = "ON"
-            else:
-                value = "OFF"
+            value = "ON" if packet[5 + light_id] & 1 else "OFF"
 
             if last_topic_list.get(topic) != value:
                 logger.info(
@@ -767,18 +585,18 @@ def serial_receive_state(device, packet):
         room_count = int((int(packet[4]) - 5) / 2)
 
         for thermostat_id in range(1, room_count + 1):
-            if ((packet[6] & 0x1F) >> (room_count - id)) & 1:
-                value1 = "ON"
-            else:
-                value1 = "OFF"
-            if ((packet[7] & 0x1F) >> (room_count - id)) & 1:
-                value2 = "ON"
-            else:
-                value2 = "OFF"
-            value3 = packet[8 + id * 2]
-            value4 = packet[9 + id * 2]
+            # 수정: id 대신 thermostat_id 사용
+            power_bit = (packet[6] & 0x1F) >> (room_count - thermostat_id)
+            away_bit = (packet[7] & 0x1F) >> (room_count - thermostat_id)
 
-            for sub_topic, value in zip(['power', 'away', 'target', 'current'], [value1, value2, value3, value4]):
+            value1 = "ON" if power_bit & 1 else "OFF"
+            value2 = "ON" if away_bit & 1 else "OFF"
+            value3 = packet[8 + thermostat_id * 2]
+            value4 = packet[9 + thermostat_id * 2]
+
+            for sub_topic, value in zip(
+                ["power", "away", "target", "current"], [value1, value2, value3, value4]
+            ):
                 topic = f"{prefix}/{device}/{grp_id}_{thermostat_id}/{sub_topic}/state"
                 if last_topic_list.get(topic) != value:
                     logger.info(
@@ -787,314 +605,263 @@ def serial_receive_state(device, packet):
                     mqtt.publish(topic, value)
                     last_topic_list[topic] = value
 
-# KTDO: 수정 완료
-def recv_safe(count=1):
-    try:
-        data = conn.recv(count)
-        if not data:
-            return None
-        return data
-    except socket.timeout:
-        return None
-    except (OSError, serial.SerialException):
-        return None
 
-
-# KTDO: 수정 완료
-def serial_get_header():
-    try:
-        # 0x80보다 큰 byte가 나올 때까지 대기
-        # KTDO: 시작 F7 찾기
-        while True:
-            # header_0 = conn.recv(1)[0]
-            raw = recv_safe(1)
-            if not raw: return None, None, None, None
-            header_0 = raw[0]
-
-            # print(conn.recv(1))
-            raw_dummy = recv_safe(1)
-            if not raw_dummy: return None, None, None, None
-            print(raw_dummy)
-
-            # if header_0 >= 0x80: break
-            if header_0 == 0xF7:
-                break
-
-        # 중간에 corrupt되는 data가 있으므로 연속으로 0x80보다 큰 byte가 나오면 먼젓번은 무시한다
-        # KTDO: 연속 0xF7 무시
-        while 1:
-            # header_1 = conn.recv(1)[0]
-            raw = recv_safe(1)
-            if not raw: return None, None, None, None
-            header_1 = raw[0]
-
-            # if header_1 < 0x80: break
-            if header_1 != 0xF7:
-                break
-            header_0 = header_1
-
-        # header_2 = conn.recv(1)[0]
-        raw = recv_safe(1)
-        if not raw: return None, None, None, None
-        header_2 = raw[0]
-
-        # header_3 = conn.recv(1)[0]
-        raw = recv_safe(1)
-        if not raw: return None, None, None, None
-        header_3 = raw[0]
-
-    except (OSError, serial.SerialException):
-        logger.error("ignore exception!")
-        header_0 = header_1 = header_2 = header_3 = 0
-
-    # 헤더 반환
-    return header_0, header_1, header_2, header_3
-
-
-# KTDO: 수정 완료
-def serial_ack_command(packet):
-    logger.info("ack from device: {} ({:x})".format(serial_ack[packet].hex(), packet))
-
-    # 성공한 명령을 지움
-    serial_queue.pop(serial_ack[packet], None)
-    serial_ack.pop(packet)
-
-
-# KTDO: 수정 완료
-def serial_send_command():
-    # 한번에 여러개 보내면 응답이랑 꼬여서 망함
-    cmd = next(iter(serial_queue))
-    conn.send(cmd)
-
-    # ack = bytearray(cmd[0:3])
-    # KTDO: Ezville은 4 Byte까지 확인 필요
-    ack = bytearray(cmd[0:4])
-    ack[3] = ACK_MAP[cmd[1]][cmd[3]]
-    waive_ack = False
-    if ack[3] == 0x00:
-        waive_ack = True
-    ack = int.from_bytes(ack, "big")
-
-    # retry time 관리, 초과했으면 제거
-    elapsed = time.time() - serial_queue[cmd]
-    if elapsed > Options["rs485"]["max_retry"]:
-        logger.error("send to device:  {} max retry time exceeded!".format(cmd.hex()))
-        serial_queue.pop(cmd)
-        serial_ack.pop(ack, None)
-    elif elapsed > 3:
-        logger.warning(
-            "send to device:  {}, try another {:.01f} seconds...".format(
-                cmd.hex(), Options["rs485"]["max_retry"] - elapsed
-            )
+def serial_ack_command(header):
+    """ACK 수신 처리"""
+    if header in serial_ack:
+        logger.info(
+            "ack from device: {} ({:x})".format(serial_ack[header].hex(), header)
         )
-        serial_ack[ack] = cmd
-    elif waive_ack:
-        logger.info("waive ack:  {}".format(cmd.hex()))
-        serial_queue.pop(cmd)
-        serial_ack.pop(ack, None)
-    else:
-        logger.info("send to device:  {}".format(cmd.hex()))
-        serial_ack[ack] = cmd
+        serial_queue.pop(serial_ack[header], None)
+        serial_ack.pop(header)
 
 
-# KTDO: 수정 완료
-def serial_loop():
-    logger.info("start loop ...")
-    wrong_header_1 = set()
-    loop_count = 0
-    scan_count = 0
-    send_aggressive = False
+def process_single_packet(packet):
+    """단일 패킷 처리"""
+    global last_packet_time
 
-    # Set timeout for periodic checks
-    conn.set_timeout(1.0)
+    if len(packet) < 7:
+        return
+
+    if not serial_verify_checksum(packet):
+        return
+
     last_packet_time = time.time()
-    last_restart_check = 0
 
-    start_time = time.time()
-    while True:
-        # 로그 출력
-        sys.stdout.flush()
+    header_1 = packet[1]  # device id
+    header_3 = packet[3]  # command
 
-        # Auto Restart Check
-        if time.time() - last_restart_check > 10:
-            last_restart_check = time.time()
+    # 상태 응답 처리
+    if header_1 in STATE_HEADER and header_3 == STATE_HEADER[header_1][1]:
+        device = STATE_HEADER[header_1][0]
+        serial_receive_state(device, packet)
 
-            # Scheduled Restart
-            restart_time = Options.get("restart", {}).get("time", "04:00")
-            if restart_time and datetime.datetime.now().strftime("%H:%M") == restart_time:
-                logger.info(f"Scheduled restart at {restart_time}")
-                sys.exit(0)
+        # 대기 중인 명령이 있으면 전송
+        if serial_queue:
+            send_pending_command()
 
-            # Inactivity Restart
-            inactivity_limit = Options.get("restart", {}).get("inactivity", 0)
-            if inactivity_limit > 0:
-                if time.time() - last_packet_time > inactivity_limit * 60:
-                    logger.warning(f"No packets for {inactivity_limit} minutes. Restarting...")
-                    sys.exit(0)
+    # ACK 처리
+    elif header_1 in ACK_HEADER:
+        header = (
+            packet[0] << 24 | packet[1] << 16 | packet[2] << 8 | packet[3]
+        )
+        serial_ack_command(header)
 
-        # 첫 Byte만 0x80보다 큰 두 Byte를 찾음
-        header_0, header_1, header_2, header_3 = serial_get_header()
+    # 명령 전송 타이밍 (상태 응답 이후)
+    # 수정: 항상 True였던 조건문 수정
+    elif header_3 in (0x81, 0x8F, 0x0F):
+        if serial_queue:
+            send_pending_command()
 
-        if header_0 is None:
-            continue
-        
-        last_packet_time = time.time()
 
-        # KTDO: 패킷단위로 분석할 것이라 합치지 않음.
-        # header = (header_0 << 8) | header_1
-        # device로부터의 state 응답이면 확인해서 필요시 HA로 전송해야 함
-        if header_1 in STATE_HEADER and header_3 in STATE_HEADER[header_1]:
-            # packet = bytes([header_0, header_1])
+def send_pending_command():
+    """대기 중인 명령 전송"""
+    if not serial_queue:
+        return
 
-            # 몇 Byte짜리 패킷인지 확인
-            # device, remain = STATE_HEADER[header]
-            device = STATE_HEADER[header_1][0]
-            # KTDO: 데이터 길이는 다음 패킷에서 확인
-            header_4 = conn.recv(1)[0]
-            data_length = int(header_4)
+    cmd = next(iter(serial_queue))
 
-            # KTDO: packet 생성 위치 변경
-            packet = bytes([header_0, header_1, header_2, header_3, header_4])
+    # ACK 헤더 생성
+    if cmd[1] in ACK_MAP and cmd[3] in ACK_MAP[cmd[1]]:
+        ack = bytearray(cmd[0:4])
+        ack[3] = ACK_MAP[cmd[1]][cmd[3]]
+        waive_ack = ack[3] == 0x00
+        ack_int = int.from_bytes(ack, "big")
 
-            # 해당 길이만큼 읽음
-            # KTDO: 데이터 길이 + 2 (XOR + ADD) 만큼 읽음
-            packet += conn.recv(data_length + 2)
+        elapsed = time.time() - serial_queue[cmd]
 
-            # checksum 오류 없는지 확인
-            # KTDO: checksum 및 ADD 오류 없는지 확인
-            if not serial_verify_checksum(packet):
-                continue
-
-            # 디바이스 응답 뒤에도 명령 보내봄
-            if serial_queue and not conn.check_pending_recv():
-                serial_send_command()
-                conn.set_pending_recv()
-
-            # 적절히 처리한다
-            serial_receive_state(device, packet)
-
-        # KTDO: 이전 명령의 ACK 경우
-        elif header_1 in ACK_HEADER and header_3 in ACK_HEADER[header_1]:
-            # 한 byte 더 뽑아서, 보냈던 명령의 ack인지 확인
-            # header_2 = conn.recv(1)[0]
-            # header = (header << 8) | header_2
-            header = header_0 << 24 | header_1 << 16 | header_2 << 8 | header_3
-
-            if header in serial_ack:
-                serial_ack_command(header)
-
-        # 명령을 보낼 타이밍인지 확인: 0xXX5A 는 장치가 있는지 찾는 동작이므로,
-        # 아직도 이러고 있다는건 아무도 응답을 안할걸로 예상, 그 타이밍에 끼어든다.
-        # KTDO: EzVille은 표준에 따라 Ack 이후 다음 Request 까지의 시간 활용하여 command 전송
-        #       즉 State 확인 후에만 전달
-        elif (header_3 == 0x81 or 0x8F or 0x0F) or send_aggressive:
-            # if header_1 == HEADER_1_SCAN or send_aggressive:
-            scan_count += 1
-            if serial_queue and not conn.check_pending_recv():
-                serial_send_command()
-                conn.set_pending_recv()
-
-        # 전체 루프 수 카운트
-        # KTDO: 가스 밸브 쿼리로 확인
-        global HEADER_0_FIRST
-        # KTDO: 2번째 Header가 장치 Header임
-        if header_1 == HEADER_0_FIRST[0][0] and (
-            header_3 == HEADER_0_FIRST[0][1] or header_3 == HEADER_0_FIRST[1][1]
-        ):
-            loop_count += 1
-
-            # 돌만큼 돌았으면 상황 판단
-            if loop_count == 30:
-                # discovery: 가끔 비트가 튈때 이상한 장치가 등록되는걸 막기 위해, 시간제한을 둠
-                if Options["mqtt"]["_discovery"]:
-                    logger.info("Add new device:  All done.")
-                    Options["mqtt"]["_discovery"] = False
-                else:
-                    logger.info("running stable...")
-
-                # 스캔이 없거나 적으면, 명령을 내릴 타이밍을 못잡는걸로 판단, 아무때나 닥치는대로 보내봐야한다.
-                if Options["serial_mode"] == "serial" and scan_count < 30:
-                    logger.warning(f"initiate aggressive send mode! {scan_count}")
-                    send_aggressive = True
-
-            # HA 재시작한 경우
-            elif loop_count > 30 and Options["mqtt"]["_discovery"]:
-                loop_count = 1
-
-        # 루프 카운트 세는데 실패하면 다른 걸로 시도해봄
-        if loop_count == 0 and time.time() - start_time > 6:
+        if elapsed > Options["rs485"]["max_retry"]:
             logger.error(
-                "check loop count fail: there are no F7 {:02X} ** {:02X} or F7 {:02X} ** {:02X}! try F7 {:02X} ** {:02X} or F7 {:02X} ** {:02X}...".format(
-                    HEADER_0_FIRST[0][0],
-                    HEADER_0_FIRST[0][1],
-                    HEADER_0_FIRST[1][0],
-                    HEADER_0_FIRST[1][1],
-                    header_0_first_candidate[-1][0][0],
-                    header_0_first_candidate[-1][0][1],
-                    header_0_first_candidate[-1][1][0],
-                    header_0_first_candidate[-1][1][1],
+                "send to device:  {} max retry time exceeded!".format(cmd.hex())
+            )
+            serial_queue.pop(cmd)
+            serial_ack.pop(ack_int, None)
+        elif waive_ack:
+            rs485_send(cmd)
+            logger.info("waive ack:  {}".format(cmd.hex()))
+            serial_queue.pop(cmd)
+        elif elapsed > 3:
+            rs485_send(cmd)
+            logger.warning(
+                "send to device:  {}, try another {:.01f} seconds...".format(
+                    cmd.hex(), Options["rs485"]["max_retry"] - elapsed
                 )
             )
-            HEADER_0_FIRST = header_0_first_candidate.pop()
-            start_time = time.time()
-            scan_count = 0
+            serial_ack[ack_int] = cmd
+        else:
+            rs485_send(cmd)
+            serial_ack[ack_int] = cmd
+    else:
+        # ACK 맵에 없는 경우 그냥 전송
+        rs485_send(cmd)
+        serial_queue.pop(cmd)
 
 
-# KTDO: 수정 완료
-def dump_loop():
-    dump_time = Options["rs485"]["dump_time"]
+def process_packets():
+    """버퍼에서 패킷 추출 및 처리"""
+    while True:
+        packet = packet_buffer.get_packet()
+        if packet is None:
+            break
+        process_single_packet(packet)
 
-    if dump_time > 0:
-        if dump_time < 10:
+
+def mqtt_on_rs485_recv(msg):
+    """EW11에서 RS485 데이터 수신"""
+    packet_buffer.add_data(msg.payload)
+    process_packets()
+
+
+def mqtt_on_message(client, userdata, msg):
+    """MQTT 메시지 수신 콜백"""
+    topic = msg.topic
+    recv_topic = Options["rs485_mqtt"]["recv_topic"]
+
+    # EW11에서 RS485 데이터 수신
+    if topic == recv_topic:
+        mqtt_on_rs485_recv(msg)
+        return
+
+    # 기존 처리
+    topics = topic.split("/")
+
+    if len(topics) < 2:
+        return
+
+    try:
+        payload = msg.payload.decode()
+    except:
+        return
+
+    logger.info("recv. from HA:   %s = %s", topic, payload)
+
+    device = topics[1]
+    if device == "status":
+        if payload == "online":
+            mqtt_init_discovery()
+    elif device == "debug":
+        mqtt_debug(topics, payload)
+    elif len(topics) >= 4:
+        mqtt_device(topics, payload)
+
+
+def mqtt_on_connect(client, userdata, flags, rc, properties):
+    """MQTT 연결 콜백"""
+    if rc == 0:
+        logger.info("MQTT connect successful!")
+        global mqtt_connected
+        mqtt_connected = True
+    else:
+        logger.error("MQTT connection return with:  %s", paho_mqtt.connack_string(rc))
+
+    mqtt_init_discovery()
+
+    # RS485 수신 토픽 구독
+    recv_topic = Options["rs485_mqtt"]["recv_topic"]
+    logger.info("subscribe %s", recv_topic)
+    mqtt.subscribe(recv_topic, 0)
+
+    # HA 상태 토픽 구독
+    topic = "homeassistant/status"
+    logger.info("subscribe %s", topic)
+    mqtt.subscribe(topic, 0)
+
+    # 장치 제어 명령 토픽 구독
+    prefix = Options["mqtt"]["prefix"]
+    if Options["wallpad_mode"] != "off":
+        topic = f"{prefix}/+/+/+/command"
+        logger.info("subscribe %s", topic)
+        mqtt.subscribe(topic, 0)
+
+
+def mqtt_on_disconnect(client, userdata, rc):
+    """MQTT 연결 해제 콜백"""
+    logger.warning("MQTT disconnected! (%s)", rc)
+    global mqtt_connected
+    mqtt_connected = False
+
+
+def start_mqtt_loop():
+    """MQTT 루프 시작"""
+    logger.info("initialize mqtt...")
+
+    mqtt.on_message = mqtt_on_message
+    mqtt.on_connect = mqtt_on_connect
+    mqtt.on_disconnect = mqtt_on_disconnect
+
+    if Options["mqtt"]["need_login"]:
+        mqtt.username_pw_set(Options["mqtt"]["user"], Options["mqtt"]["passwd"])
+
+    try:
+        mqtt.connect(Options["mqtt"]["server"], Options["mqtt"]["port"])
+    except Exception as e:
+        logger.error("MQTT server address/port may be incorrect! (%s)", e)
+        sys.exit(1)
+
+    mqtt.loop_start()
+
+    delay = 1
+    while not mqtt_connected:
+        logger.info("waiting MQTT connected ...")
+        time.sleep(delay)
+        delay = min(delay * 2, 10)
+
+
+def watchdog_loop():
+    """Watchdog 루프 - 패킷 수신 모니터링"""
+    global last_packet_time
+
+    timeout = Options.get("watchdog", {}).get("timeout", 60)
+    if timeout <= 0:
+        logger.info("Watchdog disabled")
+        return
+
+    logger.info("Watchdog started (timeout: %d seconds)", timeout)
+
+    while True:
+        time.sleep(10)
+
+        elapsed = time.time() - last_packet_time
+        if elapsed > timeout:
             logger.warning(
-                "dump_time is too short! automatically changed to 10 seconds..."
+                "No packet received for %.1f seconds (timeout: %d)",
+                elapsed,
+                timeout,
             )
-            dump_time = 10
+            # 버퍼 초기화
+            packet_buffer.clear()
 
-        start_time = time.time()
-        logger.warning("packet dump for {} seconds!".format(dump_time))
-
-        conn.set_timeout(2)
-        logs = []
-        while time.time() - start_time < dump_time:
-            try:
-                data = conn.recv(128)
-            except:
-                continue
-
-            if data:
-                for b in data:
-                    if b == 0xF7 or len(logs) > 500:
-                        logger.info("".join(logs))
-                        logs = ["{:02X}".format(b)]
-                    else:
-                        logs.append(",  {:02X}".format(b))
-        logger.info("".join(logs))
-        logger.warning("dump done.")
-        conn.set_timeout(None)
+        # 오래된 명령 정리
+        current_time = time.time()
+        expired_cmds = [
+            cmd
+            for cmd, timestamp in serial_queue.items()
+            if current_time - timestamp > Options["rs485"]["max_retry"]
+        ]
+        for cmd in expired_cmds:
+            logger.warning("Expired command removed: %s", cmd.hex())
+            serial_queue.pop(cmd, None)
 
 
 if __name__ == "__main__":
-    global conn
-
-    # configuration 로드 및 로거 설정
     init_logger()
     init_option(sys.argv)
     init_logger_file()
 
-    if Options["serial_mode"] == "socket":
-        logger.info("initialize socket...")
-        conn = EzVilleSocket()
-    else:
-        logger.info("initialize serial...")
-        conn = EzVilleSerial()
-
-    dump_loop()
+    logger.info("Starting EzVille Wallpad Addon (MQTT-only mode)")
 
     start_mqtt_loop()
 
+    # Watchdog 스레드 시작
+    watchdog_thread = threading.Thread(target=watchdog_loop, daemon=True)
+    watchdog_thread.start()
+
+    logger.info("Addon running. Waiting for RS485 packets via MQTT...")
+
     try:
-        # 무한 루프
-        serial_loop()
-    except:
-        logger.exception("addon finished!")
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        logger.info("Addon stopped by user")
+    except Exception as e:
+        logger.exception("Addon finished with error: %s", e)

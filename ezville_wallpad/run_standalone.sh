@@ -18,9 +18,8 @@ GENERATE_OPTION_SCRIPT=generate_options_standalone.py
 # 	$SUDO apt install -y python3-pip
 # fi
 
-# python3 -m pip install --upgrade pip
-# python3 -m pip install pyserial
-# python3 -m pip install paho-mqtt
+python3 -m pip install --upgrade pip
+python3 -m pip install paho-mqtt
 
 if [ ! -f $OPTION_FILE ]; then
 	python3 $GENERATE_OPTION_SCRIPT $OPTION_FILE
