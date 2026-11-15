@@ -18,60 +18,21 @@ import threading
 
 RS485_DEVICE = {
     "light": {
-        "query": {
-            "id": 0x0E,
-            "cmd": 0x01,
-        },
-        "state": {
-            "id": 0x0E,
-            "cmd": 0x81,
-        },
+        "state": {"id": 0x0E, "cmd": 0x81},
         "last": {},
-        "power": {
-            "id": 0x0E,
-            "cmd": 0x41,
-            "ack": 0xC1,
-        },
+        "power": {"id": 0x0E, "cmd": 0x41, "ack": 0xC1},
     },
     "thermostat": {
-        "query": {
-            "id": 0x36,
-            "cmd": 0x01,
-        },
-        "state": {
-            "id": 0x36,
-            "cmd": 0x81,
-        },
+        "state": {"id": 0x36, "cmd": 0x81},
         "last": {},
-        "away": {
-            "id": 0x36,
-            "cmd": 0x45,
-            "ack": 0x00,
-        },
-        "target": {
-            "id": 0x36,
-            "cmd": 0x44,
-            "ack": 0xC4,
-        },
-    },
-    "gasvalve": {
-        "state": {"id": 0x12, "cmd": 0x81},
-        "power": {"id": 0x12, "cmd": 0x41, "ack": 0xC1},
-    },
-    "batch": {
-        "state": {"id": 0x33, "cmd": 0x81},
-        "press": {"id": 0x33, "cmd": 0x41, "ack": 0xC1},
-    },
-    "plug": {
-        "state": {"id": 0x50, "cmd": 0x81},
-        "power": {"id": 0x50, "cmd": 0x43, "ack": 0xC3},
+        "power": {"id": 0x36, "cmd": 0x43, "ack": 0xC3},
+        "away": {"id": 0x36, "cmd": 0x45, "ack": 0x00},  # 응답 없음
+        "target": {"id": 0x36, "cmd": 0x44, "ack": 0xC4},
     },
 }
 
 DISCOVERY_DEVICE = {
-    "ids": [
-        "ezville_wallpad",
-    ],
+    "ids": ["ezville_wallpad"],
     "name": "ezville_wallpad",
     "mf": "EzVille",
     "mdl": "EzVille Wallpad",
@@ -79,112 +40,47 @@ DISCOVERY_DEVICE = {
 }
 
 DISCOVERY_PAYLOAD = {
-    "light": [
-        {
-            "_intg": "light",
-            "~": "{prefix}/light/{grp}_{rm}_{id}",
-            "name": "{prefix}_light_{grp}_{rm}_{id}",
-            "opt": True,
-            "stat_t": "~/power/state",
-            "cmd_t": "~/power/command",
-        }
-    ],
-    "thermostat": [
-        {
-            "_intg": "climate",
-            "~": "{prefix}/thermostat/{grp}_{id}",
-            "name": "{prefix}_thermostat_{grp}_{id}",
-            "mode_stat_t": "~/power/state",
-            "temp_stat_t": "~/target/state",
-            "temp_cmd_t": "~/target/command",
-            "curr_temp_t": "~/current/state",
-            "away_stat_t": "~/away/state",
-            "away_cmd_t": "~/away/command",
-            "modes": ["off", "heat"],
-            "min_temp": 5,
-            "max_temp": 40,
-        }
-    ],
-    "plug": [
-        {
-            "_intg": "switch",
-            "~": "{prefix}/plug/{idn}/power",
-            "name": "{prefix}_plug_{idn}",
-            "stat_t": "~/state",
-            "cmd_t": "~/command",
-            "icon": "mdi:power-plug",
-        },
-        {
-            "_intg": "switch",
-            "~": "{prefix}/plug/{idn}/idlecut",
-            "name": "{prefix}_plug_{idn}_standby_cutoff",
-            "stat_t": "~/state",
-            "cmd_t": "~/command",
-            "icon": "mdi:leaf",
-        },
-        {
-            "_intg": "sensor",
-            "~": "{prefix}/plug/{idn}",
-            "name": "{prefix}_plug_{idn}_power_usage",
-            "stat_t": "~/current/state",
-            "unit_of_meas": "W",
-        },
-    ],
-    "cutoff": [
-        {
-            "_intg": "switch",
-            "~": "{prefix}/cutoff/{idn}/power",
-            "name": "{prefix}_light_cutoff_{idn}",
-            "stat_t": "~/state",
-            "cmd_t": "~/command",
-        }
-    ],
-    "gasvalve": [
-        {
-            "_intg": "switch",
-            "~": "{prefix}/gasvalve/{idn}",
-            "name": "{prefix}_gasvalve_{idn}",
-            "stat_t": "~/power/state",
-            "cmd_t": "~/power/command",
-            "icon": "mdi:valve",
-        }
-    ],
-    "energy": [
-        {
-            "_intg": "sensor",
-            "~": "{prefix}/energy/{idn}",
-            "name": "_",
-            "stat_t": "~/current/state",
-            "unit_of_meas": "_",
-            "val_tpl": "_",
-        }
-    ],
+    "light": {
+        "_intg": "light",
+        "~": "{prefix}/light/{grp}_{rm}_{id}",
+        "name": "{prefix}_light_{grp}_{rm}_{id}",
+        "opt": True,
+        "stat_t": "~/power/state",
+        "cmd_t": "~/power/command",
+    },
+    # 디밍 조명에만 추가되는 키
+    "light_dimming": {
+        "bri_stat_t": "~/brightness/state",
+        "bri_cmd_t": "~/brightness/command",
+        "bri_scl": 4,  # 실측: 4단계, 명령 = 단계<<4 | 1
+        "on_cmd_type": "brightness",  # 켤 때 ON 대신 밝기만 전송 (이중 전송 방지)
+    },
+    "thermostat": {
+        "_intg": "climate",
+        "~": "{prefix}/thermostat/{grp}_{id}",
+        "name": "{prefix}_thermostat_{grp}_{id}",
+        "mode_stat_t": "~/power/state",
+        "mode_cmd_t": "~/power/command",
+        "temp_stat_t": "~/target/state",
+        "temp_cmd_t": "~/target/command",
+        "curr_temp_t": "~/current/state",
+        "modes": ["off", "heat"],
+        "min_temp": 5,
+        "max_temp": 40,
+    },
 }
 
 STATE_HEADER = {
     prop["state"]["id"]: (device, prop["state"]["cmd"])
     for device, prop in RS485_DEVICE.items()
-    if "state" in prop
-}
-QUERY_HEADER = {
-    prop["query"]["id"]: (device, prop["query"]["cmd"])
-    for device, prop in RS485_DEVICE.items()
-    if "query" in prop
-}
-ACK_HEADER = {
-    prop[cmd]["id"]: (device, prop[cmd]["ack"])
-    for device, prop in RS485_DEVICE.items()
-    for cmd, code in prop.items()
-    if "ack" in code
 }
 
 ACK_MAP = {}
 for device, prop in RS485_DEVICE.items():
     for cmd, code in prop.items():
         if "ack" in code:
-            if code["id"] not in ACK_MAP:
-                ACK_MAP[code["id"]] = {}
-            ACK_MAP[code["id"]][code["cmd"]] = code["ack"]
+            ACK_MAP.setdefault(code["id"], {})[code["cmd"]] = code["ack"]
+ACK_HEADER = ACK_MAP.keys()
 
 # 전역 변수
 serial_queue = {}
@@ -198,10 +94,6 @@ logger = logging.getLogger(__name__)
 
 # Watchdog 관련 전역 변수
 last_packet_time = time.time()
-
-# 패킷 버퍼 (MQTT에서 받은 RS485 데이터 처리용)
-packet_buffer = bytearray()
-packet_buffer_lock = threading.Lock()
 
 # 명령 전송 관련
 command_send_lock = threading.Lock()
@@ -416,73 +308,65 @@ def mqtt_debug(topics, payload):
             serial_queue[packet] = time.time()
 
 
+def make_packet(dev_id, room, cmd, data):
+    """[F7][dev_id][room][cmd][len][data...][XOR][ADD] 패킷 생성"""
+    packet = bytearray([0xF7, dev_id, room, cmd, len(data), *data, 0, 0])
+    packet[-2], packet[-1] = serial_generate_checksum(packet)
+    return bytes(packet)
+
+
+def encode_temp(value):
+    """온도 → 바이트 (BIT7: 0.5도)"""
+    t = float(value)
+    return int(t) | (0x80 if t % 1 >= 0.5 else 0)
+
+
+def decode_temp(byte):
+    t = (byte & 0x7F) + (0.5 if byte & 0x80 else 0)
+    return int(t) if t.is_integer() else t
+
+
+def is_dimming(idn):
+    return idn in Options.get("light_dimming", [])
+
+
 def mqtt_device(topics, payload):
     """HA에서 받은 장치 제어 명령 처리"""
-    device = topics[1]
-    idn = topics[2]
-    cmd = topics[3]
+    device, idn, sub = topics[1], topics[2], topics[3]
 
     if device not in RS485_DEVICE:
         logger.error("    unknown device!")
-        return
-    if cmd not in RS485_DEVICE[device]:
-        logger.error("    unknown command!")
         return
     if payload == "":
         logger.error("    no payload!")
         return
 
-    cmd = RS485_DEVICE[device][cmd]
+    ids = [int(x) for x in idn.split("_")]
+    room = ids[0] << 4 | ids[1]
     packet = None
 
-    if device == "light":
-        if payload == "ON":
-            payload = 0xF1 if idn.startswith("1_1") else 0x01
-        elif payload == "OFF":
-            payload = 0x00
-        length = 10
-        packet = bytearray(length)
-        packet[0] = 0xF7
-        packet[1] = cmd["id"]
-        packet[2] = int(idn.split("_")[0]) << 4 | int(idn.split("_")[1])
-        packet[3] = cmd["cmd"]
-        packet[4] = 0x03
-        packet[5] = int(idn.split("_")[2])
-        packet[6] = payload
-        packet[7] = 0x00
-        packet[8], packet[9] = serial_generate_checksum(packet)
+    if device == "light" and sub in ("power", "brightness"):
+        if sub == "brightness":
+            level = max(0, min(4, int(float(payload))))
+            value = level << 4 | 1 if level else 0x00
+        else:
+            value = 0x01 if payload == "ON" else 0x00
+        cmd = RS485_DEVICE["light"]["power"]
+        packet = make_packet(cmd["id"], room, cmd["cmd"], [ids[2], value, 0x00])
 
-    elif device == "thermostat":
-        if payload == "heat":
-            payload = 0x01
-        elif payload == "off":
-            payload = 0x00
-        length = 8
-        packet = bytearray(length)
-        packet[0] = 0xF7
-        packet[1] = cmd["id"]
-        packet[2] = int(idn.split("_")[0]) << 4 | int(idn.split("_")[1])
-        packet[3] = cmd["cmd"]
-        packet[4] = 0x01
-        packet[5] = int(float(payload))
-        packet[6], packet[7] = serial_generate_checksum(packet)
+    elif device == "thermostat" and sub == "power":
+        # off는 외출 모드로 매핑 (월패드 난방 끄기 = 외출)
+        cmd = RS485_DEVICE["thermostat"]["power" if payload == "heat" else "away"]
+        packet = make_packet(cmd["id"], room, cmd["cmd"], [0x01])
 
-    elif device == "gasvalve":
-        if payload == "off":
-            payload = 0x00
-            length = 8
-            packet = bytearray(length)
-            packet[0] = 0xF7
-            packet[1] = cmd["id"]
-            packet[2] = int(idn) if idn.isdigit() else 0x01
-            packet[3] = cmd["cmd"]
-            packet[4] = 0x01
-            packet[5] = int(float(payload))
-            packet[6], packet[7] = serial_generate_checksum(packet)
+    elif device == "thermostat" and sub == "target":
+        cmd = RS485_DEVICE["thermostat"]["target"]
+        packet = make_packet(cmd["id"], room, cmd["cmd"], [encode_temp(payload)])
 
     if packet:
-        packet = bytes(packet)
         serial_queue[packet] = time.time()
+    else:
+        logger.error("    unknown command!")
 
 
 def mqtt_init_discovery():
@@ -495,56 +379,35 @@ def mqtt_init_discovery():
     last_topic_list = {}
 
 
-def serial_new_device(device, packet, idn=None):
+def serial_new_device(device, packet):
     """새 장치 Discovery 등록"""
     prefix = Options["mqtt"]["prefix"]
+    grp_id = packet[2] >> 4
 
     if device == "light":
-        grp_id = int(packet[2] >> 4)
-        rm_id = int(packet[2] & 0x0F)
-        light_count = int(packet[4]) - 1
-
-        for light_id in range(1, light_count + 1):
-            payload = DISCOVERY_PAYLOAD[device][0].copy()
-            payload["~"] = payload["~"].format(
-                prefix=prefix, grp=grp_id, rm=rm_id, id=light_id
-            )
-            payload["name"] = payload["name"].format(
-                prefix=prefix, grp=grp_id, rm=rm_id, id=light_id
-            )
+        rm_id = packet[2] & 0x0F
+        for light_id in range(1, packet[4]):
+            idn = f"{grp_id}_{rm_id}_{light_id}"
+            payload = DISCOVERY_PAYLOAD["light"].copy()
+            payload["~"] = f"{prefix}/light/{idn}"
+            payload["name"] = f"{prefix}_light_{idn}"
+            if is_dimming(idn):
+                payload.update(DISCOVERY_PAYLOAD["light_dimming"])
             mqtt_discovery(payload)
 
     elif device == "thermostat":
-        grp_id = int(packet[2] >> 4)
-        room_count = int((int(packet[4]) - 5) / 2)
-
-        for room_id in range(1, room_count + 1):
-            payload = DISCOVERY_PAYLOAD[device][0].copy()
-            payload["~"] = payload["~"].format(prefix=prefix, grp=grp_id, id=room_id)
-            payload["name"] = payload["name"].format(
-                prefix=prefix, grp=grp_id, id=room_id
-            )
+        for room_id in range(1, (packet[4] - 5) // 2 + 1):
+            payload = DISCOVERY_PAYLOAD["thermostat"].copy()
+            payload["~"] = f"{prefix}/thermostat/{grp_id}_{room_id}"
+            payload["name"] = f"{prefix}_thermostat_{grp_id}_{room_id}"
             mqtt_discovery(payload)
 
-    elif device in DISCOVERY_PAYLOAD:
-        for payloads in DISCOVERY_PAYLOAD[device]:
-            payload = payloads.copy()
 
-            payload["~"] = payload["~"].format(prefix=prefix, idn=idn)
-            payload["name"] = payload["name"].format(prefix=prefix, idn=idn)
-
-            if device == "energy":
-                payload["name"] = "{}_{}_consumption".format(
-                    prefix, ("power", "gas", "water")[idn]
-                )
-                payload["unit_of_meas"] = ("W", "m³/h", "m³/h")[idn]
-                payload["val_tpl"] = (
-                    "{{ value }}",
-                    "{{ value | float / 100 }}",
-                    "{{ value | float / 100 }}",
-                )[idn]
-
-            mqtt_discovery(payload)
+def publish_state(topic, value, packet):
+    if last_topic_list.get(topic) != value:
+        logger.info("publish to HA:   %s = %s (%s)", topic, value, packet.hex())
+        mqtt.publish(topic, value)
+        last_topic_list[topic] = value
 
 
 def serial_receive_state(device, packet):
@@ -556,54 +419,42 @@ def serial_receive_state(device, packet):
         return
 
     if Options["mqtt"]["_discovery"] and not last.get(idn):
-        serial_new_device(device, packet, idn)
+        serial_new_device(device, packet)
         last[idn] = True
         return
-    else:
-        last[idn] = packet
+    last[idn] = packet
 
     prefix = Options["mqtt"]["prefix"]
+    grp_id = packet[2] >> 4
 
     if device == "light":
-        grp_id = int(packet[2] >> 4)
-        rm_id = int(packet[2] & 0x0F)
-        light_count = int(packet[4]) - 1
-
-        for light_id in range(1, light_count + 1):
-            topic = f"{prefix}/{device}/{grp_id}_{rm_id}_{light_id}/power/state"
-            value = "ON" if packet[5 + light_id] & 1 else "OFF"
-
-            if last_topic_list.get(topic) != value:
-                logger.info(
-                    "publish to HA:   %s = %s (%s)", topic, value, packet.hex()
+        rm_id = packet[2] & 0x0F
+        for light_id in range(1, packet[4]):
+            light = f"{grp_id}_{rm_id}_{light_id}"
+            value = packet[5 + light_id]
+            publish_state(
+                f"{prefix}/light/{light}/power/state",
+                "ON" if value & 1 else "OFF",
+                packet,
+            )
+            if is_dimming(light) and value & 1 and value >> 4:
+                publish_state(
+                    f"{prefix}/light/{light}/brightness/state", value >> 4, packet
                 )
-                mqtt.publish(topic, value)
-                last_topic_list[topic] = value
 
     elif device == "thermostat":
-        grp_id = int(packet[2] >> 4)
-        room_count = int((int(packet[4]) - 5) / 2)
-
-        for thermostat_id in range(1, room_count + 1):
-            # 수정: id 대신 thermostat_id 사용
-            power_bit = (packet[6] & 0x1F) >> (room_count - thermostat_id)
-            away_bit = (packet[7] & 0x1F) >> (room_count - thermostat_id)
-
-            value1 = "ON" if power_bit & 1 else "OFF"
-            value2 = "ON" if away_bit & 1 else "OFF"
-            value3 = packet[8 + thermostat_id * 2]
-            value4 = packet[9 + thermostat_id * 2]
-
-            for sub_topic, value in zip(
-                ["power", "away", "target", "current"], [value1, value2, value3, value4]
-            ):
-                topic = f"{prefix}/{device}/{grp_id}_{thermostat_id}/{sub_topic}/state"
-                if last_topic_list.get(topic) != value:
-                    logger.info(
-                        "publish to HA:   %s = %s (%s)", topic, value, packet.hex()
-                    )
-                    mqtt.publish(topic, value)
-                    last_topic_list[topic] = value
+        room_count = (packet[4] - 5) // 2
+        for room_id in range(1, room_count + 1):
+            # ponytail: 1번 방 = 상위 비트 가정 (simple_mqtt는 BIT0 가정), 실측 필요
+            power_bit = (packet[6] & 0x1F) >> (room_count - room_id) & 1
+            base = f"{prefix}/thermostat/{grp_id}_{room_id}"
+            publish_state(f"{base}/power/state", "heat" if power_bit else "off", packet)
+            publish_state(
+                f"{base}/target/state", decode_temp(packet[8 + room_id * 2]), packet
+            )
+            publish_state(
+                f"{base}/current/state", decode_temp(packet[9 + room_id * 2]), packet
+            )
 
 
 def serial_ack_command(header):
@@ -642,13 +493,9 @@ def process_single_packet(packet):
 
     # ACK 처리
     elif header_1 in ACK_HEADER:
-        header = (
-            packet[0] << 24 | packet[1] << 16 | packet[2] << 8 | packet[3]
-        )
-        serial_ack_command(header)
+        serial_ack_command(int.from_bytes(packet[:4], "big"))
 
     # 명령 전송 타이밍 (상태 응답 이후)
-    # 수정: 항상 True였던 조건문 수정
     elif header_3 in (0x81, 0x8F, 0x0F):
         if serial_queue:
             send_pending_command()
@@ -730,7 +577,7 @@ def mqtt_on_message(client, userdata, msg):
 
     try:
         payload = msg.payload.decode()
-    except:
+    except UnicodeDecodeError:
         return
 
     logger.info("recv. from HA:   %s = %s", topic, payload)
@@ -742,7 +589,10 @@ def mqtt_on_message(client, userdata, msg):
     elif device == "debug":
         mqtt_debug(topics, payload)
     elif len(topics) >= 4:
-        mqtt_device(topics, payload)
+        try:
+            mqtt_device(topics, payload)
+        except (ValueError, IndexError) as e:
+            logger.error("    invalid command %s = %s (%s)", topic, payload, e)
 
 
 def mqtt_on_connect(client, userdata, flags, rc, properties):

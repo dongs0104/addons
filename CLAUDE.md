@@ -97,10 +97,13 @@ HA integration topics (`ezville/...`, `homeassistant/...`) follow standard MQTT 
 
 ### Device IDs
 - Light: `0x0E`
-- Thermostat: `0x36`
-- Gas valve: `0x12`
-- Plug: `0x50`
-- Batch: `0x33`
+- Thermostat: `0x36` (power `0x43`, target `0x44`, away `0x45`; temp BIT7 = +0.5)
+- Light dimming: data byte = `level<<4 | on` (level 1-15, unverified beyond 0xF1)
+
+### Test
+```bash
+python3 ezville_wallpad/test_ezville_wallpad.py
+```
 
 ### Key Functions
 - `rs485_send(packet)`: Send command via MQTT to EW11

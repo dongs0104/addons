@@ -1,5 +1,5 @@
 {
-	"version": "0.0.1.b6d8f6a",
+	"version": "0.0.2",
 	"slug": "ezville_wallpad",
 	"name": "EzVille RS485 Addon (MQTT)",
 	"description": "이지빌용 월패드 애드온 (MQTT 전용 모드)",
@@ -12,6 +12,7 @@
 
 	"options": {
 		"wallpad_mode": "on",
+		"light_dimming": [ "1_1_1", "1_1_2" ],
 		"rs485_mqtt": {
 			"recv_topic": "ew11/recv",
 			"send_topic": "ew11/send"
@@ -42,6 +43,7 @@
 	},
 	"schema": {
 		"wallpad_mode": "list(on|off)",
+		"light_dimming": [ "str" ],
 		"rs485_mqtt": {
 			"recv_topic": "str",
 			"send_topic": "str"
