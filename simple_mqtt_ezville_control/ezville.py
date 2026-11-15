@@ -45,6 +45,15 @@ DISCOVERY_DEVICE = {
     "sw": "dongs0104/addons/ezville_wallpad",
 }
 
+# 디밍 조명: 상태 바이트 = [단계<<4 | 0x02(디밍 표시) | BIT0 켜짐], 명령 = [단계<<4 | 1], 4단계
+DIMMING_LIGHTS = set()
+DIMMING_PAYLOAD = {
+    "bri_stat_t": "~/brightness/state",
+    "bri_cmd_t": "~/brightness/command",
+    "bri_scl": 4,
+    "on_cmd_type": "brightness",  # 켤 때 ON 대신 밝기 명령만 전송
+}
+
 # MQTT Discovery를 위한 Payload 정보
 DISCOVERY_PAYLOAD = {
     "light": [
@@ -95,7 +104,7 @@ DISCOVERY_PAYLOAD = {
             "name": "ezville_plug_{:0>2d}_{:0>2d}_powermeter",
             "stat_t": "~/current/state",
             "unit_of_meas": "W",
-            "device_class": "energy"
+            "device_class": "power",
         },
     ],
     "gasvalve": [
@@ -251,7 +260,6 @@ def ezville_loop(config):
     EW11_TIMEOUT = config["ew11_timeout"]
     last_received_time = time.time()
 
-
     # MQTT Integration 활성화 확인 Flag - 단, 사용을 위해서는 MQTT Integration에서 Birth/Last Will Testament 설정 및 Retain 설정 필요
     MQTT_ONLINE = False
 
@@ -316,7 +324,9 @@ def ezville_loop(config):
                     log("[INFO] MQTT Integration 온라인")
                     MQTT_ONLINE = True
                     if not msg.retain:
-                        log("[INFO] MQTT Birth Message가 Retain이 아니므로 정상화까지 Delay 부여")
+                        log(
+                            "[INFO] MQTT Birth Message가 Retain이 아니므로 정상화까지 Delay 부여"
+                        )
                         startup_delay = REBOOT_DELAY
                 elif status == "offline":
                     log("[INFO] MQTT Integration 오프라인")
@@ -420,6 +430,9 @@ def ezville_loop(config):
                                     discovery_name = "{}_{:0>2d}_{:0>2d}".format(
                                         name, rid, id
                                     )
+                                    light_value = int(
+                                        packet[10 + 2 * id : 12 + 2 * id], 16
+                                    )
 
                                     if discovery_name not in DISCOVERY_LIST:
                                         DISCOVERY_LIST.append(discovery_name)
@@ -429,19 +442,27 @@ def ezville_loop(config):
                                         payload["name"] = payload["name"].format(
                                             rid, id
                                         )
+                                        if light_value & 0x02:
+                                            payload.update(DIMMING_PAYLOAD)
 
                                         # 장치 등록 후 DISCOVERY_DELAY초 후에 State 업데이트
                                         await mqtt_discovery(payload)
                                         await asyncio.sleep(DISCOVERY_DELAY)
 
                                     # State 업데이트까지 진행
-                                    onoff = (
-                                        "ON"
-                                        if int(packet[10 + 2 * id : 12 + 2 * id], 16) & 1
-                                        else "OFF"
-                                    )
-
+                                    onoff = "ON" if light_value & 1 else "OFF"
                                     await update_state(name, "power", rid, id, onoff)
+
+                                    if light_value & 0x02:
+                                        DIMMING_LIGHTS.add(discovery_name)
+                                        if light_value & 1:
+                                            await update_state(
+                                                name,
+                                                "brightness",
+                                                rid,
+                                                id,
+                                                str(light_value >> 4),
+                                            )
 
                                     # 직전 처리 State 패킷은 저장
                                     if STATE_PACKET:
@@ -540,7 +561,9 @@ def ezville_loop(config):
 
                                         # BIT0: 대기전력 On/Off, BIT1: 자동모드 On/Off
                                         # 위와 같지만 일단 on-off 여부만 판단
-                                        DATA = "{0:024b}".format(int(packet[6 + 6 * id : 12 + 6 * id], 16))
+                                        DATA = "{0:024b}".format(
+                                            int(packet[6 + 6 * id : 12 + 6 * id], 16)
+                                        )
                                         onoff = "ON" if DATA[3] == "1" else "OFF"
                                         autoonoff = "ON" if DATA[0] == "1" else "OFF"
                                         current = DATA[4:]
@@ -705,7 +728,7 @@ def ezville_loop(config):
             sid = int(device_info[2])
             cur_state = DEVICE_STATE.get(key)
 
-            if value == cur_state:
+            if value == cur_state and topics[2] != "brightness":
                 pass
 
             else:
@@ -826,8 +849,17 @@ def ezville_loop(config):
 
                 elif device == "light":
                     pwr = "01" if value == "ON" else "00"
-                    if idx == 1 and sid in [1, 2] and pwr == "01":
-                        pwr = "F1"
+                    statcmd = [key, value]
+                    if topics[2] == "brightness":
+                        level = max(0, min(4, int(float(value))))
+                        pwr = f"{level}1" if level else "00"
+                        statcmd = (
+                            [key, str(level)] if level else [topics[1] + "power", "OFF"]
+                        )
+                    elif topics[1] in DIMMING_LIGHTS and pwr == "01":
+                        # 디밍 조명 ON: 마지막 단계(없으면 최대)로 켜기
+                        last = DEVICE_STATE.get(topics[1] + "brightness", "4")
+                        pwr = f"{last}1"
                     sendcmd = checksum(
                         "F7"
                         + RS485_DEVICE[device]["power"]["id"]
@@ -844,7 +876,6 @@ def ezville_loop(config):
                         + f"1{idx}"
                         + RS485_DEVICE[device]["power"]["ack"]
                     )
-                    statcmd = [key, value]
 
                     await CMD_QUEUE.put(
                         {"sendcmd": sendcmd, "recvcmd": recvcmd, "statcmd": statcmd}
@@ -859,7 +890,7 @@ def ezville_loop(config):
 
                 elif device == "plug":
                     pwr = "11" if value == "ON" else "10"
-                    
+
                     sendcmd = checksum(
                         "F7"
                         + RS485_DEVICE[device]["power"]["id"]
@@ -1073,7 +1104,9 @@ def ezville_loop(config):
                 return soc
             except ConnectionRefusedError as e:
                 log(
-                    "[ERROR] Server에서 연결을 거부합니다. 재시도 예정 (" + str(retry_count) + "회 재시도)"
+                    "[ERROR] Server에서 연결을 거부합니다. 재시도 예정 ("
+                    + str(retry_count)
+                    + "회 재시도)"
                 )
                 time.sleep(1)
                 retry_count += 1
