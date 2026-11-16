@@ -4,112 +4,49 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Home Assistant add-on for Korean apartment wallpad control (EzVille).
-RS485 communication with wallpad uses MQTT via EW11 (WiFi-to-RS485 converter).
-HA integration uses standard MQTT Discovery (automatic as HA add-on).
-
-## Architecture
+Home Assistant add-on repository for Korean apartment wallpad control (EzVille).
+The only add-on is `simple_mqtt_ezville_control` (this is what runs at home).
+RS485 traffic reaches the add-on via EW11 (WiFi-to-RS485) over MQTT; HA integration is MQTT Discovery.
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                          MQTT Broker                                │
-└─────────────────────────────────────────────────────────────────────┘
-       ▲                    ▲                           ▲
-       │ ew11/recv          │ ew11/send                 │ ezville/...
-       │ (RS485 rx)         │ (RS485 tx)                │ homeassistant/...
-       │                    │                           │
-┌──────┴──────┐      ┌──────┴───────────────────────────┴──────┐
-│    EW11     │      │              This Addon                 │
-│ (RS485-WiFi)│      │  - Parse RS485 packets                  │
-└──────┬──────┘      │  - Control wallpad devices              │
-       │             │  - Publish states to HA                 │
-    RS485            └─────────────────────────────────────────┘
-       │
-┌──────┴──────┐
-│  Wallpad    │
-│ (Light,     │
-│  Thermostat,│
-│  etc.)      │
-└─────────────┘
+Wallpad ──RS485── EW11 ──MQTT ew11/recv──▶ add-on ──MQTT ezville/...──▶ HA
+                       ◀──MQTT ew11/send──        ◀── ezville/.../command
 ```
 
-## Build and Run Commands
+The MQTT device name is `ezville_wallpad` (in `ezville.py`); HA entity IDs derive from it
+(`light.ezville_wallpad_ezville_light_01_01`). Do not rename it.
 
-### Docker (Home Assistant Add-on)
+## Layout
+
+- `simple_mqtt_ezville_control/ezville.py`: whole add-on (single asyncio loop in `ezville_loop`)
+- `simple_mqtt_ezville_control/config.json`: add-on version/options. Bump `version` or HA won't see updates.
+- `simple_mqtt_ezville_control/PACKETS.md`: packet notes
+
+## Key Functions (inside `ezville_loop`)
+
+- `EW11_process(raw_hex)`: split packets, parse states, register discovery, `update_state`
+- `HA_process(topics, value)`: HA command → RS485 packet → `CMD_QUEUE`
+- `send_to_ew11(send_data)`: send + retry until `DEVICE_STATE` matches `statcmd`
+- `checksum(hex)`: fills XOR/ADD bytes
+
+## Packet Structure
+
+```
+[F7][device_id][room][cmd][len][data...][XOR][ADD]
+```
+
+Device IDs: light `0E`, thermostat `36`, plug `39`, gas valve `12`, batch `33`.
+
+### Light dimming (measured 2026-11-16)
+- Command data: `[light_no][level<<4 | 1][00]`, levels 1-4 (e.g. `41` = level 4)
+- State byte: `level<<4 | 0x02 (dimmable flag) | on-bit`; off = `0x02`
+- Dimmable lights are auto-detected from the `0x02` bit.
+
+## Test
+
 ```bash
-docker build -t ezville_wallpad ./ezville_wallpad
-docker run ezville_wallpad
+python3 simple_mqtt_ezville_control/test_dimming.py
 ```
-
-### Standalone Mode
-```bash
-cd ezville_wallpad
-./run_standalone.sh  # First run generates options_standalone.json
-```
-
-### Dependencies
-- Python 3.10+
-- paho-mqtt
-
-### Code Formatting
-```bash
-black .
-```
-
-## Key Configuration (`config.json`)
-
-```json
-{
-    "rs485_mqtt": {
-        "recv_topic": "ew11/recv",  // EW11 → Addon: raw RS485 packets from wallpad
-        "send_topic": "ew11/send"   // Addon → EW11: commands to wallpad
-    },
-    "mqtt": {
-        "server": "...",
-        "prefix": "ezville"  // Topic prefix for HA integration (ezville/light/..., etc.)
-    },
-    "watchdog": {
-        "timeout": 60  // Alert if no RS485 packet received (seconds)
-    }
-}
-```
-
-### MQTT Topics (RS485 Communication)
-| Topic | Direction | Purpose |
-|-------|-----------|---------|
-| `ew11/recv` | EW11 → Addon | Raw RS485 packets from wallpad |
-| `ew11/send` | Addon → EW11 | RS485 commands to wallpad |
-
-HA integration topics (`ezville/...`, `homeassistant/...`) follow standard MQTT Discovery conventions.
-
-## Core Module: `ezville_wallpad/ezville_wallpad.py`
-
-### Data Flow
-1. **MQTT Receive** (`mqtt_on_rs485_recv`): EW11 publishes RS485 data to `ew11/recv`
-2. **Packet Buffer** (`PacketBuffer`): Buffers and extracts complete packets (starts with `0xF7`)
-3. **Packet Processing** (`process_single_packet`): Parses state responses, handles ACKs
-4. **HA Publish** (`serial_receive_state`): Publishes device states to `ezville/{device}/{id}/state`
-
-### Packet Structure
-```
-[0xF7][device_id][room_id][cmd][length][data...][XOR checksum][ADD checksum]
-```
-
-### Device IDs
-- Light: `0x0E`
-- Thermostat: `0x36` (power `0x43`, target `0x44`, away `0x45`; temp BIT7 = +0.5)
-- Light dimming: data byte = `level<<4 | on` (level 1-15, unverified beyond 0xF1)
-
-### Test
-```bash
-python3 ezville_wallpad/test_ezville_wallpad.py
-```
-
-### Key Functions
-- `rs485_send(packet)`: Send command via MQTT to EW11
-- `process_packets()`: Extract and process packets from buffer
-- `serial_verify_checksum()`: Validate packet checksum
-- `watchdog_loop()`: Monitor packet reception, clear stale commands
 
 ## Language
 
