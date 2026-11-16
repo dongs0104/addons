@@ -18,16 +18,19 @@ The MQTT device name is `ezville_wallpad` (in `ezville.py`); HA entity IDs deriv
 
 ## Layout
 
-- `simple_mqtt_ezville_control/ezville.py`: whole add-on (single asyncio loop in `ezville_loop`)
+- `simple_mqtt_ezville_control/ezville.py`: `Wallpad` class — MQTT I/O, state cache, command retry loops (asyncio)
+- `simple_mqtt_ezville_control/devices.py`: one class per device (`parse` / `discovery` / `command`), registry `DEVICES`
+- `simple_mqtt_ezville_control/packet.py`: byte-level split / checksum / build
 - `simple_mqtt_ezville_control/config.json`: add-on version/options. Bump `version` or HA won't see updates.
 - `simple_mqtt_ezville_control/PACKETS.md`: packet notes
 
-## Key Functions (inside `ezville_loop`)
+## Data Flow
 
-- `EW11_process(raw_hex)`: split packets, parse states, register discovery, `update_state`
-- `HA_process(topics, value)`: HA command → RS485 packet → `CMD_QUEUE`
-- `send_to_ew11(send_data)`: send + retry until `DEVICE_STATE` matches `statcmd`
-- `checksum(hex)`: fills XOR/ADD bytes
+1. `ew11/recv` → `Wallpad.on_rs485` → `packet.split` (keeps partial tail in `residue`)
+2. `DEVICES[id].parse(packet)` → `Reading`s → discovery (first time) + `update_state` (publish on change)
+3. `ezville/<name>/<sub>/command` → `Device.command` → `Command(packet, key, target)` → `send` retries until `state[key] == target`
+
+EW11 is MQTT-only (no socket mode).
 
 ## Packet Structure
 
@@ -45,7 +48,7 @@ Device IDs: light `0E`, thermostat `36`, plug `39`, gas valve `12`, batch `33`.
 ## Test
 
 ```bash
-python3 simple_mqtt_ezville_control/test_dimming.py
+cd simple_mqtt_ezville_control && python3 test_ezville.py  # real captured packets
 ```
 
 ## Language
