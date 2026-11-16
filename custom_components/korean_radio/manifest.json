@@ -1,0 +1,10 @@
+{
+  "domain": "korean_radio",
+  "name": "한국 라디오",
+  "codeowners": [],
+  "dependencies": ["http", "media_source"],
+  "documentation": "https://github.com/BSofDeath/radio.bsod.kr",
+  "iot_class": "cloud_polling",
+  "requirements": [],
+  "version": "0.0.1"
+}
