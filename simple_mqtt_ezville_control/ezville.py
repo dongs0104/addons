@@ -77,7 +77,14 @@ class Wallpad:
     def dispatch(self, topic, payload, retain):
         if topic != HA_STATUS_TOPIC:
             self.inbox.put_nowait((topic, payload))
-        elif self.cfg["reboot_control"]:
+            return
+        if payload == b"online":
+            # HA 재시작 시 discovery(retain 안 함)를 잊으므로 다시 등록하고 상태도 다시 발행
+            log("[INFO] HA 온라인: 장치 재등록")
+            self.discovered.clear()
+            self.force_update = True
+            self.loop.call_later(5, setattr, self, "force_update", False)
+        if self.cfg["reboot_control"]:
             if payload == b"online":
                 log("[INFO] MQTT Integration 온라인")
                 if not retain:

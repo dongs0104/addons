@@ -86,6 +86,14 @@ async def main():
     assert cfg["ezville_light_01_01"]["bri_scl"] == 4
     assert "bri_scl" not in cfg["ezville_light_01_03"]
 
+    # HA 재시작(birth: online) → discovery와 상태를 다시 발행
+    w.loop = asyncio.get_running_loop()
+    sent.clear()
+    w.dispatch("homeassistant/status", b"online", False)
+    await w.on_rs485(bytes.fromhex(CAPTURED[0]))
+    assert any(t.endswith("ezville_light_01_01/config") for t, _ in sent)
+    assert ("ezville/light_01_04/power/state", "ON") in sent
+
     # 명령: 옛 코드와 같은 패킷 (디밍은 월패드가 보낸 실측 패킷과 동일)
     async def cmd(topic, value):
         await w.on_ha_command(topic, value)

@@ -1,5 +1,8 @@
 수정 사항 Changelog
 
+v 0.0.6 (2026-11-16)
+* HA 재시작 시 월패드 엔티티가 모두 unavailable 되던 문제: homeassistant/status=online 수신 시 discovery 재등록 + 상태 재발행
+
 v 0.0.5 (2026-11-16)
 * 환기(전열교환기, 0x32) 추가: 켜기/끄기, 풍량 약·중·강, 모드 전열/바이패스
 
