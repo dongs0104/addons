@@ -6,7 +6,6 @@ EW11은 MQTT 모드로 연결: 수신 ew11/recv, 송신 ew11/send
 import asyncio
 import json
 import random
-import sys
 import time
 
 import paho.mqtt.client as mqtt
@@ -57,7 +56,6 @@ class Wallpad:
         self.discovered = set()
         self.residue = b""
         self.force_update = False
-        self.last_received = time.time()
 
     # ---------- MQTT ----------
     def on_connect(self, client, userdata, flags, rc, properties):
@@ -106,7 +104,6 @@ class Wallpad:
 
     # ---------- 월패드 → HA ----------
     async def on_rs485(self, data: bytes):
-        self.last_received = time.time()
         if self.ew11_log:
             log("[SIGNAL] received: {}".format(data.hex().upper()))
         packets, self.residue = pk.split(self.residue + data)
@@ -225,20 +222,6 @@ class Wallpad:
             self.force_update = False
             log("[INFO] 상태 강제 업데이트 종료")
 
-    async def health_loop(self):
-        timeout = self.cfg["ew11_timeout"]
-        while True:
-            await asyncio.sleep(min(timeout, 60))
-            elapsed = time.time() - self.last_received
-            if elapsed > timeout:
-                log(
-                    "[WARNING] {:.0f}초간 신호를 받지 못했습니다 (timeout: {:.0f}초). 앱을 재시작합니다.".format(
-                        elapsed, timeout
-                    )
-                )
-                # 비정상 종료여야 Supervisor watchdog가 다시 띄움 (0이면 정지 상태로 남음)
-                sys.exit(1)
-
     async def run(self):
         self.loop = asyncio.get_running_loop()
         self.mqtt.connect_async(self.cfg["mqtt_server"])
@@ -251,7 +234,7 @@ class Wallpad:
             await asyncio.sleep(self.startup_delay)
             log("[INFO] 장치 등록 및 상태 업데이트를 시작합니다")
 
-            loops = [self.inbox_loop(), self.command_loop(), self.health_loop()]
+            loops = [self.inbox_loop(), self.command_loop()]
             if self.cfg["force_update_mode"]:
                 loops.append(self.force_update_loop())
             tasks = [asyncio.ensure_future(c) for c in loops]

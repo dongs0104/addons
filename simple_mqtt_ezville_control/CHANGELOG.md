@@ -1,5 +1,8 @@
 수정 사항 Changelog
 
+v 0.0.8 (2026-11-16)
+* EW11 무신호 시 애드온 재시작(ew11_timeout) 제거: EW11 직결(소켓) 시절 로직. MQTT 경유에선 재시작해도 신호가 오지 않음 (MQTT 재연결은 paho가 처리)
+
 v 0.0.7 (2026-11-16)
 * EW11 무신호 timeout 시 종료 코드를 1로 변경: 0이면 Supervisor가 재시작하지 않고 정지 상태로 남던 문제 (애드온 Watchdog 켜야 재시작)
 * mqtt_password를 password 타입으로 (UI에서 가려짐)

@@ -45,7 +45,6 @@
   - discovery_delay (초): MQTT Discovery로 장치 등록 후 대기 시간 (기본값 0.2초)
   - force_update_mode / force_update_period / force_update_duration: 주기(기본 10분)마다 잠깐(기본 2초) 같은 상태도 다시 발행
   - reboot_control / reboot_delay: HA MQTT 통합이 오프라인→온라인 되면 처음부터 다시 등록 (Birth Message가 retain이 아니면 reboot_delay초 대기)
-  - ew11_timeout (초): 이 시간 동안 RS485 패킷이 없으면 애드온 재시작 (기본값 1시간)
 
 ### 3.3. 지원 장치
 
