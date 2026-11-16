@@ -5,7 +5,7 @@ import asyncio
 import ezville
 import packet as pk
 
-# 실측 상태 패킷 (조명 4개 방, 난방, 플러그, 가스, 원격검침 전기)
+# 실측 상태 패킷 (조명 4개 방, 난방, 플러그, 가스, 원격검침 전기, 환기)
 CAPTURED = [
     "f70e11810500020200016d0e",
     "f70e1281030000006904",
@@ -17,6 +17,7 @@ CAPTURED = [
     "f7398f8104009000005428",
     "f712018102002245f4",
     "f73003810800000746001696008c38",  # 원격검침 전기: 746 W, 16960.0 kWh
+    "f7320181050001030100" "43f8",  # 환기: 켜짐, 강풍, 전열
 ]
 
 CFG = dict(
@@ -61,6 +62,9 @@ async def main():
         "ezville/gasvalve_01_01/power/state": "OFF",
         "ezville/energy_03_01/power/state": "746",
         "ezville/energy_03_01/usage/state": "16960.0",
+        "ezville/fan_01_01/power/state": "ON",
+        "ezville/fan_01_01/speed/state": "3",
+        "ezville/fan_01_01/mode/state": "전열",
     }
     for k, v in expect.items():
         assert s.get(k) == v, (k, s.get(k), v)
@@ -116,6 +120,11 @@ async def main():
     assert (await cmd("ezville/batch_01_01/elevator-up/command", "PRESS"))[
         :14
     ] == "F7330181030010"
+    # 환기: 월패드가 보낸 실측 명령과 동일
+    assert await cmd("ezville/fan_01_01/speed/command", "2") == "F7320142010285F4"
+    assert await cmd("ezville/fan_01_01/mode/command", "바이패스") == "F7320143010385F6"
+    assert await cmd("ezville/fan_01_01/power/command", "OFF") == "F7320141010084F0"
+    assert await cmd("ezville/fan_01_01/speed/command", "0") == "F7320141010084F0"
     for c in [pk.build(0x36, 0x12, 0x44, [24])]:
         assert pk.split(c)[0][0].data == bytes([24])
     print("OK")

@@ -362,7 +362,59 @@ class Energy(Device):
         ]
 
 
+class Fan(Device):
+    """환기(전열교환기). 상태/ACK: [에러][전원][풍량 1~3][모드][00]
+    명령: 0x41 전원, 0x42 풍량, 0x43 모드 (명령 번호 = 바꾸는 바이트)"""
+
+    name, id, acks = "fan", 0x32, (0xC1, 0xC2, 0xC3)
+    MODES = {1: "전열", 3: "바이패스"}  # 2026-11-16 실측
+    templates = [
+        {
+            "_intg": "fan",
+            "~": "ezville/fan_{:0>2d}_{:0>2d}",
+            "name": "ezville_fan_{:0>2d}_{:0>2d}",
+            "stat_t": "~/power/state",
+            "cmd_t": "~/power/command",
+            "pct_stat_t": "~/speed/state",
+            "pct_cmd_t": "~/speed/command",
+            "spd_rng_min": 1,
+            "spd_rng_max": 3,
+            "pr_mode_stat_t": "~/mode/state",
+            "pr_mode_cmd_t": "~/mode/command",
+            "pr_modes": list(MODES.values()),
+            "icon": "mdi:air-filter",
+        }
+    ]
+
+    def parse(self, p):
+        d = p.data
+        states = {"power": bit(d[1], 0)}
+        if d[1]:
+            states["speed"] = str(d[2])
+        if d[3] in self.MODES:
+            states["mode"] = self.MODES[d[3]]
+        return [Reading(p.room, 1, states)]
+
+    def command(self, sub, value, id1, id2, state):
+        if sub == "power":
+            on = int(value == "ON")
+            return self._cmd(sub, id1, id2, id1, 0x41, [on], value)
+        if sub == "speed":
+            speed = int(float(value))
+            if speed == 0:
+                return self._cmd("power", id1, id2, id1, 0x41, [0], "OFF")
+            return self._cmd(
+                sub, id1, id2, id1, 0x42, [min(speed, 3)], str(min(speed, 3))
+            )
+        if sub == "mode":
+            code = {v: k for k, v in self.MODES.items()}.get(value)
+            if code:
+                return self._cmd(sub, id1, id2, id1, 0x43, [code], value)
+        return None
+
+
 DEVICES = {
-    d.id: d for d in (Light(), Thermostat(), Plug(), GasValve(), Batch(), Energy())
+    d.id: d
+    for d in (Light(), Thermostat(), Plug(), GasValve(), Batch(), Energy(), Fan())
 }
 BY_NAME = {d.name: d for d in DEVICES.values()}
