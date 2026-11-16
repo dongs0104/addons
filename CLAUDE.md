@@ -38,7 +38,7 @@ EW11 is MQTT-only (no socket mode).
 [F7][device_id][room][cmd][len][data...][XOR][ADD]
 ```
 
-Device IDs: light `0E`, thermostat `36`, plug `39`, gas valve `12`, batch `33`, energy meter `30` (room 03 = electricity), fan `32`.
+Device IDs: light `0E`, thermostat `36`, plug `39`, gas valve `12`, energy meter `30` (room 03 = electricity), fan `32`.
 Unparsed (meaning unknown): `30` room 02, `40`, `63`, `39` cmd `52`/`D2`.
 
 ### Light dimming (measured 2026-11-16)

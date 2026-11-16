@@ -1,5 +1,9 @@
 수정 사항 Changelog
 
+v 0.0.10 (2026-11-16)
+* 일괄차단기(엘리베이터, 0x33) 제거: 이 집 RS485에 해당 패킷이 없음
+* reboot_control / reboot_delay / discovery_delay 제거: birth 재등록 + retain 상태로 대체
+
 v 0.0.9 (2026-11-16)
 * 상태 토픽을 retain으로 발행: HA 재시작/브로커 재연결 시 브로커가 마지막 상태를 바로 전달
 * 주기적 상태 강제 업데이트(force_update_*) 제거: retain으로 대체

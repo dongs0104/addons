@@ -26,8 +26,6 @@ CFG = dict(
     EW11_LOG=False,
     mqtt_id="",
     mqtt_password="",
-    discovery_delay=0,
-    reboot_control=False,
 )
 
 
@@ -89,7 +87,7 @@ async def main():
     # HA 재시작(birth: online) → discovery 재등록 (상태는 retain)
     w.loop = asyncio.get_running_loop()
     sent.clear()
-    w.dispatch("homeassistant/status", b"online", False)
+    w.dispatch("homeassistant/status", b"online")
     await w.on_rs485(bytes.fromhex(CAPTURED[0]))
     assert any(t.endswith("ezville_light_01_01/config") for t, _ in sent)
 
@@ -124,9 +122,6 @@ async def main():
     assert (
         await cmd("ezville/gasvalve_01_01/power/command", "ON")
     ) is None  # 열기 불가
-    assert (await cmd("ezville/batch_01_01/elevator-up/command", "PRESS"))[
-        :14
-    ] == "F7330181030010"
     # 환기: 월패드가 보낸 실측 명령과 동일
     assert await cmd("ezville/fan_01_01/speed/command", "2") == "F7320142010285F4"
     assert await cmd("ezville/fan_01_01/mode/command", "바이패스") == "F7320143010385F6"

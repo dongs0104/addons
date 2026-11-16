@@ -18,7 +18,6 @@ class Reading(NamedTuple):
     id1: int
     id2: int
     states: Dict[str, str]  # HA로 발행
-    hidden: Dict[str, str] = {}  # 내부 상태로만 보관
     discovery_extra: Dict[str, object] = {}
 
 
@@ -261,66 +260,6 @@ class GasValve(Device):
         return self._cmd(sub, id1, id2, id1, 0x41, [0], value)
 
 
-class Batch(Device):
-    """일괄 차단기: 상태 비트 5 엘리베이터 하향, 4 상향, 2 그룹 조명, 1 외출"""
-
-    name, id = "batch", 0x33
-    templates = [
-        {
-            "_intg": "button",
-            "~": "ezville/batch_{:0>2d}_{:0>2d}",
-            "name": "ezville_batch-elevator-up_{:0>2d}_{:0>2d}",
-            "cmd_t": "~/elevator-up/command",
-            "icon": "mdi:elevator-up",
-        },
-        {
-            "_intg": "button",
-            "~": "ezville/batch_{:0>2d}_{:0>2d}",
-            "name": "ezville_batch-elevator-down_{:0>2d}_{:0>2d}",
-            "cmd_t": "~/elevator-down/command",
-            "icon": "mdi:elevator-down",
-        },
-        {
-            "_intg": "binary_sensor",
-            "~": "ezville/batch_{:0>2d}_{:0>2d}",
-            "name": "ezville_batch-groupcontrol_{:0>2d}_{:0>2d}",
-            "stat_t": "~/group/state",
-            "icon": "mdi:lightbulb-group",
-        },
-        {
-            "_intg": "binary_sensor",
-            "~": "ezville/batch_{:0>2d}_{:0>2d}",
-            "name": "ezville_batch-outing_{:0>2d}_{:0>2d}",
-            "stat_t": "~/outing/state",
-            "icon": "mdi:home-circle",
-        },
-    ]
-    BITS = {"elevator-down": 5, "elevator-up": 4, "group": 2, "outing": 1}
-
-    def handles(self, p):
-        return p.cmd == STATE
-
-    def parse(self, p):
-        v = p.data[1]
-        return [
-            Reading(
-                1,
-                1,
-                {"group": bit(v, 2), "outing": bit(v, 1)},
-                hidden={"elevator-up": bit(v, 4), "elevator-down": bit(v, 5)},
-            )
-        ]
-
-    def command(self, sub, value, id1, id2, state):
-        # 월패드에 상태 패킷을 대신 보내 버튼을 누른 것처럼 동작, ACK 없음
-        prefix = entity(self.name, id1, id2)
-        data = 0
-        for name, n in self.BITS.items():
-            if name == sub or state(prefix + name) == "ON":
-                data |= 1 << n
-        return self._cmd(sub, id1, id2, id1, STATE, [0, data, 0], None)
-
-
 class Energy(Device):
     """원격검침. 방 03 = 전기: [에러][현재 W, BCD 3바이트][누적 0.1kWh, BCD 4바이트]
     방 02(가스/수도로 추정)는 단위 미확인이라 제외"""
@@ -415,6 +354,6 @@ class Fan(Device):
 
 DEVICES = {
     d.id: d
-    for d in (Light(), Thermostat(), Plug(), GasValve(), Batch(), Energy(), Fan())
+    for d in (Light(), Thermostat(), Plug(), GasValve(), Energy(), Fan())
 }
 BY_NAME = {d.name: d for d in DEVICES.values()}

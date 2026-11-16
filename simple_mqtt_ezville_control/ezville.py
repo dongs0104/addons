@@ -44,12 +44,6 @@ class Wallpad:
         self.mqtt.on_message = self.on_message
         self.mqtt.on_disconnect = lambda *a: log("[INFO] MQTT 연결 해제")
 
-        self.ha_online = asyncio.Event()
-        self.ha_offline = asyncio.Event()
-        self.startup_delay = 0
-        self.reset()
-
-    def reset(self):
         self.inbox = asyncio.Queue()  # (topic, payload) MQTT 수신
         self.commands = asyncio.Queue()
         self.state = {}  # "light_01_01power" -> "ON"
@@ -67,11 +61,9 @@ class Wallpad:
 
     def on_message(self, client, userdata, msg):
         # paho 스레드 → asyncio 루프로 넘김
-        self.loop.call_soon_threadsafe(
-            self.dispatch, msg.topic, msg.payload, msg.retain
-        )
+        self.loop.call_soon_threadsafe(self.dispatch, msg.topic, msg.payload)
 
-    def dispatch(self, topic, payload, retain):
+    def dispatch(self, topic, payload):
         if topic != HA_STATUS_TOPIC:
             self.inbox.put_nowait((topic, payload))
             return
@@ -79,20 +71,6 @@ class Wallpad:
             # HA 재시작 시 discovery(retain 안 함)를 잊으므로 다시 등록 (상태는 retain이라 브로커가 전달)
             log("[INFO] HA 온라인: 장치 재등록")
             self.discovered.clear()
-        if self.cfg["reboot_control"]:
-            if payload == b"online":
-                log("[INFO] MQTT Integration 온라인")
-                if not retain:
-                    log(
-                        "[INFO] Birth Message가 Retain이 아니므로 정상화까지 Delay 부여"
-                    )
-                    self.startup_delay = self.cfg["reboot_delay"]
-                self.ha_offline.clear()
-                self.ha_online.set()
-            elif payload == b"offline":
-                log("[INFO] MQTT Integration 오프라인")
-                self.ha_online.clear()
-                self.ha_offline.set()
 
     def publish(self, topic, value):
         # retain: HA 재시작/재연결 시 브로커가 마지막 상태를 바로 전달
@@ -109,19 +87,16 @@ class Wallpad:
             device = DEVICES.get(p.device_id)
             if device and device.handles(p):
                 for reading in device.parse(p):
-                    await self.apply(device, reading)
+                    self.apply(device, reading)
 
-    async def apply(self, device, reading):
+    def apply(self, device, reading):
         name = entity(device.name, reading.id1, reading.id2)
         if name not in self.discovered:
             self.discovered.add(name)
             for payload in device.discovery(reading):
                 self.register(payload)
-            await asyncio.sleep(self.cfg["discovery_delay"])
         for key, value in reading.states.items():
             self.update_state(name, key, value)
-        for key, value in reading.hidden.items():
-            self.state[name + key] = value
 
     def register(self, payload):
         intg = payload.pop("_intg")
@@ -215,25 +190,8 @@ class Wallpad:
         self.mqtt.connect_async(self.cfg["mqtt_server"])
         self.mqtt.loop_start()
 
-        while True:
-            if self.cfg["reboot_control"]:
-                log("[INFO] Waiting for MQTT Integration online")
-                await self.ha_online.wait()
-            await asyncio.sleep(self.startup_delay)
-            log("[INFO] 장치 등록 및 상태 업데이트를 시작합니다")
-
-            loops = [self.inbox_loop(), self.command_loop()]
-            tasks = [asyncio.ensure_future(c) for c in loops]
-
-            if not self.cfg["reboot_control"]:
-                await asyncio.gather(*tasks)
-
-            # reboot_control: HA MQTT 통합이 오프라인이 되면 처음부터 다시 등록
-            await self.ha_offline.wait()
-            log("[WARNING] 동작 중 MQTT Integration Offline 변경, 재시작")
-            for t in tasks:
-                t.cancel()
-            self.reset()
+        log("[INFO] 장치 등록 및 상태 업데이트를 시작합니다")
+        await asyncio.gather(self.inbox_loop(), self.command_loop())
 
 
 if __name__ == "__main__":
