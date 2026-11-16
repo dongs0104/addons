@@ -1,5 +1,9 @@
 수정 사항 Changelog
 
+v 0.0.7 (2026-11-16)
+* EW11 무신호 timeout 시 종료 코드를 1로 변경: 0이면 Supervisor가 재시작하지 않고 정지 상태로 남던 문제 (애드온 Watchdog 켜야 재시작)
+* mqtt_password를 password 타입으로 (UI에서 가려짐)
+
 v 0.0.6 (2026-11-16)
 * HA 재시작 시 월패드 엔티티가 모두 unavailable 되던 문제: homeassistant/status=online 수신 시 discovery 재등록 + 상태 재발행
 

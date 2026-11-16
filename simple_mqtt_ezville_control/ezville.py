@@ -236,7 +236,8 @@ class Wallpad:
                         elapsed, timeout
                     )
                 )
-                sys.exit(0)
+                # 비정상 종료여야 Supervisor watchdog가 다시 띄움 (0이면 정지 상태로 남음)
+                sys.exit(1)
 
     async def run(self):
         self.loop = asyncio.get_running_loop()
