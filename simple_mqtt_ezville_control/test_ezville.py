@@ -5,7 +5,7 @@ import asyncio
 import ezville
 import packet as pk
 
-# 실측 상태 패킷 (조명 4개 방, 난방, 플러그 5개 방, 가스)
+# 실측 상태 패킷 (조명 4개 방, 난방, 플러그, 가스, 원격검침 전기)
 CAPTURED = [
     "f70e11810500020200016d0e",
     "f70e1281030000006904",
@@ -16,6 +16,7 @@ CAPTURED = [
     "f7393f810700900000100062958e",
     "f7398f8104009000005428",
     "f712018102002245f4",
+    "f73003810800000746001696008c38",  # 원격검침 전기: 746 W, 16960.0 kWh
 ]
 
 CFG = dict(
@@ -58,6 +59,8 @@ async def main():
         "ezville/plug_03_02/current/state": "6.2",
         "ezville/plug_08_01/auto/state": "ON",
         "ezville/gasvalve_01_01/power/state": "OFF",
+        "ezville/energy_03_01/power/state": "746",
+        "ezville/energy_03_01/usage/state": "16960.0",
     }
     for k, v in expect.items():
         assert s.get(k) == v, (k, s.get(k), v)

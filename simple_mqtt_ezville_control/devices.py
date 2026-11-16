@@ -321,5 +321,48 @@ class Batch(Device):
         return self._cmd(sub, id1, id2, id1, STATE, [0, data, 0], None)
 
 
-DEVICES = {d.id: d for d in (Light(), Thermostat(), Plug(), GasValve(), Batch())}
+class Energy(Device):
+    """원격검침. 방 03 = 전기: [에러][현재 W, BCD 3바이트][누적 0.1kWh, BCD 4바이트]
+    방 02(가스/수도로 추정)는 단위 미확인이라 제외"""
+
+    name, id = "energy", 0x30
+    templates = [
+        {
+            "_intg": "sensor",
+            "~": "ezville/energy_{:0>2d}_{:0>2d}",
+            "name": "ezville_energy_{:0>2d}_{:0>2d}_power",
+            "stat_t": "~/power/state",
+            "unit_of_meas": "W",
+            "device_class": "power",
+            "state_class": "measurement",
+        },
+        {
+            "_intg": "sensor",
+            "~": "ezville/energy_{:0>2d}_{:0>2d}",
+            "name": "ezville_energy_{:0>2d}_{:0>2d}_usage",
+            "stat_t": "~/usage/state",
+            "unit_of_meas": "kWh",
+            "device_class": "energy",
+            "state_class": "total_increasing",
+        },
+    ]
+
+    def handles(self, p):
+        return p.cmd == STATE and p.room == 0x03 and len(p.data) == 8
+
+    def parse(self, p):
+        try:
+            watt, usage = int(p.data[1:4].hex()), int(p.data[4:8].hex())
+        except ValueError:  # BCD가 아닌 값
+            return []
+        return [
+            Reading(
+                p.room, 1, {"power": str(watt), "usage": "{:.1f}".format(usage / 10)}
+            )
+        ]
+
+
+DEVICES = {
+    d.id: d for d in (Light(), Thermostat(), Plug(), GasValve(), Batch(), Energy())
+}
 BY_NAME = {d.name: d for d in DEVICES.values()}
