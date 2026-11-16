@@ -55,7 +55,6 @@ class Wallpad:
         self.state = {}  # "light_01_01power" -> "ON"
         self.discovered = set()
         self.residue = b""
-        self.force_update = False
 
     # ---------- MQTT ----------
     def on_connect(self, client, userdata, flags, rc, properties):
@@ -77,11 +76,9 @@ class Wallpad:
             self.inbox.put_nowait((topic, payload))
             return
         if payload == b"online":
-            # HA 재시작 시 discovery(retain 안 함)를 잊으므로 다시 등록하고 상태도 다시 발행
+            # HA 재시작 시 discovery(retain 안 함)를 잊으므로 다시 등록 (상태는 retain이라 브로커가 전달)
             log("[INFO] HA 온라인: 장치 재등록")
             self.discovered.clear()
-            self.force_update = True
-            self.loop.call_later(5, setattr, self, "force_update", False)
         if self.cfg["reboot_control"]:
             if payload == b"online":
                 log("[INFO] MQTT Integration 온라인")
@@ -98,7 +95,8 @@ class Wallpad:
                 self.ha_offline.set()
 
     def publish(self, topic, value):
-        self.mqtt.publish(topic, value)
+        # retain: HA 재시작/재연결 시 브로커가 마지막 상태를 바로 전달
+        self.mqtt.publish(topic, value, retain=True)
         if self.mqtt_log:
             log("[LOG] ->> HA : {} >> {}".format(topic, value))
 
@@ -136,7 +134,7 @@ class Wallpad:
         self.mqtt.publish(topic, json.dumps(payload))
 
     def update_state(self, name, key, value):
-        if self.state.get(name + key) != value or self.force_update:
+        if self.state.get(name + key) != value:
             self.state[name + key] = value
             self.publish("{}/{}/{}/state".format(HA_TOPIC, name, key), value)
 
@@ -212,16 +210,6 @@ class Wallpad:
         while True:
             await self.send(await self.commands.get())
 
-    async def force_update_loop(self):
-        """주기적으로 잠깐 동안 같은 값도 다시 발행 (HA 재시작 등으로 놓친 상태 복구)"""
-        while True:
-            await asyncio.sleep(self.cfg["force_update_period"])
-            log("[INFO] 상태 강제 업데이트 실시")
-            self.force_update = True
-            await asyncio.sleep(self.cfg["force_update_duration"])
-            self.force_update = False
-            log("[INFO] 상태 강제 업데이트 종료")
-
     async def run(self):
         self.loop = asyncio.get_running_loop()
         self.mqtt.connect_async(self.cfg["mqtt_server"])
@@ -235,8 +223,6 @@ class Wallpad:
             log("[INFO] 장치 등록 및 상태 업데이트를 시작합니다")
 
             loops = [self.inbox_loop(), self.command_loop()]
-            if self.cfg["force_update_mode"]:
-                loops.append(self.force_update_loop())
             tasks = [asyncio.ensure_future(c) for c in loops]
 
             if not self.cfg["reboot_control"]:

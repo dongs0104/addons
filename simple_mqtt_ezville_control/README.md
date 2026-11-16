@@ -43,7 +43,6 @@
   - first_waittime (초): 첫 명령 후 상태 확인까지 대기 (기본값 0.5초)
   - random_backoff (체크 박스): 재시도 간격을 0 ~ command_interval 사이 랜덤으로
   - discovery_delay (초): MQTT Discovery로 장치 등록 후 대기 시간 (기본값 0.2초)
-  - force_update_mode / force_update_period / force_update_duration: 주기(기본 10분)마다 잠깐(기본 2초) 같은 상태도 다시 발행
   - reboot_control / reboot_delay: HA MQTT 통합이 오프라인→온라인 되면 처음부터 다시 등록 (Birth Message가 retain이 아니면 reboot_delay초 대기)
 
 ### 3.3. 지원 장치

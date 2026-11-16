@@ -1,6 +1,6 @@
 {
   "name": "MQTT 기반 Simple EzVille Wallpad Control",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "slug": "simple_mqtt_ezville_control",
   "url": "https://github.com/dongs0104/addons",
   "description": "MQTT(EW11 MQTT 모드)로 동작하는 EzVille 월패드 컨트롤러",
@@ -28,9 +28,6 @@
     "first_waittime": 0.5,
     "random_backoff": true,
     "discovery_delay": 0.2,
-    "force_update_mode": true,
-    "force_update_period": 600,
-    "force_update_duration": 2,
     "reboot_control": false,
     "reboot_delay": 300
   },
@@ -46,9 +43,6 @@
     "first_waittime": "float",
     "random_backoff": "bool",
     "discovery_delay": "float",
-    "force_update_mode": "bool",
-    "force_update_period": "float",
-    "force_update_duration": "float",
     "reboot_control": "bool",
     "reboot_delay": "float"
   }

@@ -34,7 +34,7 @@ CFG = dict(
 async def main():
     w = ezville.Wallpad(CFG)
     sent = []
-    w.mqtt.publish = lambda topic, value: sent.append((topic, value))
+    w.mqtt.publish = lambda topic, value, retain=False: sent.append((topic, value))
 
     # 패킷 분리: 쓰레기 바이트, 데이터 속 F7, 조각난 수신에도 정상 분리
     stream = bytes.fromhex("00f7aa" + "".join(CAPTURED))
@@ -86,13 +86,12 @@ async def main():
     assert cfg["ezville_light_01_01"]["bri_scl"] == 4
     assert "bri_scl" not in cfg["ezville_light_01_03"]
 
-    # HA 재시작(birth: online) → discovery와 상태를 다시 발행
+    # HA 재시작(birth: online) → discovery 재등록 (상태는 retain)
     w.loop = asyncio.get_running_loop()
     sent.clear()
     w.dispatch("homeassistant/status", b"online", False)
     await w.on_rs485(bytes.fromhex(CAPTURED[0]))
     assert any(t.endswith("ezville_light_01_01/config") for t, _ in sent)
-    assert ("ezville/light_01_04/power/state", "ON") in sent
 
     # 명령: 옛 코드와 같은 패킷 (디밍은 월패드가 보낸 실측 패킷과 동일)
     async def cmd(topic, value):
