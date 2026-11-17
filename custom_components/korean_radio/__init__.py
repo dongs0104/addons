@@ -6,13 +6,19 @@ from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.const import EVENT_CALL_SERVICE
 from homeassistant.core import callback
+import voluptuous as vol
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.discovery import async_load_platform
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .channels import CHANNELS, resolve
 
 DOMAIN = "korean_radio"
-CONFIG_SCHEMA = cv.empty_config_schema(DOMAIN)
+# korean_radio:
+#   speakers: {거실: media_player.geosil_4}  → media_player.korean_radio (사운드 모드 = 스피커)
+CONFIG_SCHEMA = vol.Schema(
+    {DOMAIN: vol.Any(None, {vol.Optional("speakers"): {str: cv.entity_id}})}, extra=vol.ALLOW_EXTRA
+)
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -34,6 +40,8 @@ async def async_setup(hass, config):
 
     hass.bus.async_listen(EVENT_CALL_SERVICE, on_service)
     hass.http.register_view(RadioView())
+    if speakers := (config[DOMAIN] or {}).get("speakers"):
+        hass.async_create_task(async_load_platform(hass, "media_player", DOMAIN, {"speakers": speakers}, config))
     return True
 
 

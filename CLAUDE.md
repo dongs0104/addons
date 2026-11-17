@@ -23,6 +23,7 @@ The MQTT device name is `ezville_wallpad` (in `ezville.py`); HA entity IDs deriv
 - `simple_mqtt_ezville_control/packet.py`: byte-level split / checksum / build
 - `simple_mqtt_ezville_control/config.json`: add-on version/options. Bump `version` or HA won't see updates.
 - `simple_mqtt_ezville_control/PACKETS.md`: packet notes
+- `custom_components/korean_radio/`: HA custom integration (not an add-on). Korean radio via media browser + `media_player.korean_radio` (source = channel, sound mode = HomePod). Deployed by scp to `/config/custom_components/`; HLS → ffmpeg MP3 because HomePod (pyatv) can't play HLS.
 
 ## Data Flow
 
